@@ -1,0 +1,122 @@
+{
+  "theme_overview": {
+    "philosophy": "Nugvio is a 'Friendly-Serious' AI Financial Coach for Indian youth. It rewards discipline, not spending. It must feel like a smart friend texting you, not a clinical bank statement.",
+    "anti_ai_slop_rules": "No generic purple gradients, no centered glowing orbs, no 'Inter/Roboto' fonts, no generic Bootstrap-style dashboard templates. Embrace asymmetry, rich contrasting colors, and paper-like textures.",
+    "core_directive": "Every single screen must answer 'What should the user do NEXT?' through prominent AI Nudge components.",
+    "theme_mode": "Primary is 'Warm Paper' (light mode) with Deep Ink text. Provide a Deep Navy dark mode toggle."
+  },
+  "colors": {
+    "light_mode": {
+      "background": "#F9F8F6",
+      "surface": "#FFFFFF",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "border": "#E2E8F0",
+      "brand_blue": "#2563EB",
+      "nudge_orange": "#F97316",
+      "growth_green": "#16A34A",
+      "celebration_coral": "#F43F5E"
+    },
+    "dark_mode": {
+      "background": "#020617",
+      "surface": "#0F172A",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#94A3B8",
+      "border": "#1E293B",
+      "brand_blue": "#3B82F6",
+      "nudge_orange": "#FB923C",
+      "growth_green": "#22C55E",
+      "celebration_coral": "#FB7185"
+    },
+    "rules": "Use brand_blue for primary actions. Use nudge_orange for AI insights/alerts. Use growth_green for positive health scores/savings. Use celebration_coral for NugPoints and Rewards."
+  },
+  "typography": {
+    "fonts": {
+      "headings": "'Outfit', sans-serif",
+      "body": "'DM Sans', sans-serif",
+      "expressive": "'Kalam', cursive"
+    },
+    "google_fonts_url": "https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700&family=Kalam:wght@400;700&family=Outfit:wght@400;500;600;700;800&display=swap",
+    "rules": {
+      "hierarchy": "Headings must use Outfit with tight tracking (tracking-tighter). Body uses DM Sans (leading-relaxed).",
+      "expressive_usage": "Use Kalam in celebration_coral color for the 'Nudge The Youth' tagline, user milestones, and playful UI annotations (like hand-drawn arrows or notes).",
+      "banned_fonts": "Inter, Roboto, Space Grotesk, Open Sans."
+    }
+  },
+  "visual_enhancers": {
+    "borders_and_surfaces": "Use sharp 1px borders (border-border) on cards with flat backgrounds. Avoid heavy drop shadows; prefer crisp, solid container structures.",
+    "radii": "Use rounded-2xl or rounded-3xl for main cards to feel friendly. Buttons should be pill-shaped (rounded-full).",
+    "textures": "Add subtle noise/grain overlays to hero sections and major widgets to kill the 'digital flat' look."
+  },
+  "component_patterns": {
+    "buttons": "Pill-shaped (rounded-full). Primary uses brand_blue. Hover states must translate-y-1 and add a subtle shadow.",
+    "cards": "Flat white (or dark navy) background, 1px border. No floating blurry shadows.",
+    "inputs": "Solid backgrounds (bg-gray-50 in light mode, bg-slate-800 in dark mode). Never use transparent inputs.",
+    "nudges": "A custom component for AI advice. Should look like a polished chat bubble or banner with an orange accent and an icon."
+  },
+  "layouts_and_spacing": {
+    "grid_system": "Use Bento Grid for Dashboard (asymmetric, dense). Marketing pages use Tetris Grid (wide gaps, overlapping elements).",
+    "spacing": "Generous. Use p-6, p-8, or p-12 for internal card padding to prevent text collision.",
+    "alignment": "Left-align dense text and forms. Avoid center-aligning paragraphs or long lists."
+  },
+  "motion_and_interactions": {
+    "hover": "All interactive elements must change background color and explicitly set text color on hover. E.g., hover:bg-blue-700 hover:text-white.",
+    "transitions": "Use specific transition properties (e.g., transition-transform transition-colors). Never use 'transition-all'.",
+    "micro_interactions": "Framer motion scale-up for modals, and staggered slide-ups for list items (Expenses, Debts)."
+  },
+  "screen_blueprints": {
+    "Landing": "Asymmetric Hero. Left: Massive Outfit heading, Kalam tagline. Right: Floating UI widgets (Health Score, Nudges) layered over each other. Deep ink text on warm paper background.",
+    "Auth": "Split screen layout. Image on one side, clean JWT login/signup form on the other. Use pill buttons.",
+    "Dashboard": "Bento Grid Layout. Top: Logo and a prominent 'Next Best Action' Nudge banner. Main widgets: Financial Health Score Gauge (0-100, Recharts), Cash Flow snapshot, NugPoints Wallet (Coral), AI Nudges feed.",
+    "Expenses": "List view. Prominent 'Smart Add' text input at the top ('Bought coffee for 400') that auto-categorizes via AI. Tags use green/orange.",
+    "Budget_Planner": "Category-wise Shadcn Progress bars. Bars turn from blue to orange to red as they approach limits.",
+    "Goal_Planner": "Visual image cards (Laptop, Bike) with Recharts RadialBar progress rings showing amount saved vs target.",
+    "AI_Coach": "Chat interface. Rounded bubbles. Coach responses feature a subtle orange/blue left-border to distinguish from user.",
+    "Debt_Optimizer": "Split view. Table of debts + Toggle for 'Snowball' vs 'Avalanche'. Recharts LineChart visualizes the forecast payoff date.",
+    "Learn_Literacy": "Gamified lesson cards. XP and Streak counters prominently displayed in Coral to celebrate learning.",
+    "Tax_Assistant": "Educational step-by-step wizard. Friendly layout breaking down complex tax terms into simple English.",
+    "Cash_Flow_Predict": "Recharts Area chart forecasting future balances. Includes AI warning markers on dips.",
+    "Rewards_NugPoints": "Grid of redeemable vouchers. Displays current NugPoints prominently. Focus on rewarding financial discipline."
+  },
+  "images": {
+    "logo": {
+      "url": "https://customer-assets.emergentagent.com/job_finpilot-preview-7/artifacts/fhhbnuvo_Screenshot%202026-07-15%20164528.png",
+      "usage": "Main navigation and header."
+    },
+    "landing_hero": {
+      "url": "https://images.unsplash.com/photo-1648577736141-58d4c7dcb66d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHw0fHx5b3VuZyUyMHByb2Zlc3Npb25hbCUyMGluZGlhfGVufDB8fHx8MTc4NDExNDIzN3ww&ixlib=rb-4.1.0&q=85",
+      "usage": "Hero section background or auth split screen (Confident young Indian professional)."
+    },
+    "goals_education": {
+      "url": "https://images.unsplash.com/photo-1716471081169-cb8528a395d3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxNzV8MHwxfHNlYXJjaHwzfHxpbmRpYW4lMjBzdHVkZW50JTIwbGFwdG9wfGVufDB8fHx8MTc4NDExNDIzN3ww&ixlib=rb-4.1.0&q=85",
+      "usage": "Visuals for the 'Buy a Laptop' or 'Education' in Goal Planner."
+    },
+    "lifestyle_expenses": {
+      "url": "https://images.unsplash.com/photo-1760623493867-4eeccc52f3e2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHwzfHxmcmllbmRzJTIwcGF5aW5nJTIwY2FmZSUyMHBob25lfGVufDB8fHx8MTc4NDExNDI0NHww&ixlib=rb-4.1.0&q=85",
+      "usage": "Context image for 'Expenses' or 'Splitting bills' feature."
+    },
+    "rewards_shopping": {
+      "url": "https://images.unsplash.com/photo-1758525223613-115de9f9a7e2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxzaG9wcGluZyUyMGJhZ3MlMjBoYXBweSUyMHlvdXRofGVufDB8fHx8MTc4NDExNDI0NHww&ixlib=rb-4.1.0&q=85",
+      "usage": "Context image for 'Rewards & NugPoints' section."
+    }
+  },
+  "tech_stack_and_commands": {
+    "dependencies": [
+      "yarn add iconoir-react",
+      "yarn add recharts",
+      "yarn add framer-motion"
+    ],
+    "icons": "Use iconoir-react for a non-corporate, unique aesthetic. If Lucide must be used, use stroke-width 1.5 for elegance.",
+    "charts": "Use Recharts for all graphs (Health Score Gauge, Cash Flow Area, Debt LineChart)."
+  },
+  "universal_guidelines_for_main_agent": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid the 'AI slop' aesthetic. Make creative, distinctive frontends.",
+    "DO NOT use generic centered layouts or simplistic purple/blue gradients.",
+    "All interactive and key informational elements MUST include a 'data-testid' attribute.",
+    "DO NOT apply 'transition: all' anywhere. This breaks framer-motion transforms.",
+    "DO NOT add '.App { text-align: center; }' in CSS.",
+    "Use sonner for toast notifications.",
+    "Ensure high contrast on interactive elements. NEVER use transparent backgrounds for overlays, dropdowns, or inputs.",
+    "Always add GENERAL UI UX DESIGN GUIDELINES: Provide 2-3x padding, use clear visual hierarchy, and ensure accessible contrast ratios."
+  ]
+}
