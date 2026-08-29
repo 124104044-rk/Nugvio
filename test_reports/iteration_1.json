@@ -1,0 +1,47 @@
+{
+  "summary": "Nugvio MVP smoke test on preview URL. Backend auth, health-score, nudges, categorize (Zomato->Food), expenses CRUD, budgets, budget-alerts, goals with NugPoints (+5 pts confirmed on ₹500 contribute), debts, debt strategy avalanche, coach chat (Gemini reply received) + history, lessons list, cashflow forecast, rewards, and all recurring endpoints (list/add/patch/post/run-due/delete) tested successfully. Frontend: login with prefilled demo creds redirects to /app dashboard rendering FHS 69, nudge banner, 855 NugPoints, cashflow chart, recent expenses. alerts-bell visible + panel opens. /app/recurring shows stats + seeded list; add form successfully added 'UI Test Sub' row. recurring-run-all clicked without error. /app/budgets renders form + budget cards.",
+  "tested_scope": ["frontend", "backend", "auth", "integration"],
+  "passed": [
+    "POST /api/auth/login demo user returns 200 with token",
+    "GET /api/auth/me with Bearer token returns user",
+    "GET /api/health-score returns overall=69 + sub_scores",
+    "GET /api/nudges returns array",
+    "POST /api/expenses/categorize 'Zomato dinner' -> Food",
+    "POST /api/expenses creates with id + category",
+    "GET /api/expenses lists 18 items",
+    "POST /api/budgets upsert (monthly_limit) returns ok",
+    "GET /api/budgets returns budgets with spent populated",
+    "GET /api/budget-alerts returns {alerts, count, critical} (empty since seeded usage <60%)",
+    "POST /api/goals + /contribute increased saved_amount and nug_points 850->855",
+    "GET /api/debts + /debts/strategy?method=avalanche returns months=41, total_interest, order, schedule",
+    "POST /api/coach/chat returns Gemini reply; /coach/history persists messages",
+    "GET /api/cashflow/predict returns avg_daily_spend + forecast",
+    "GET /api/rewards returns points/catalog",
+    "GET /api/recurring returns items + monthly_committed",
+    "POST /api/recurring creates; PATCH pauses; POST /post creates expense + advances next_due; POST /run-due returns {posted:N}; DELETE removes",
+    "Frontend landing/login/dashboard/recurring/budgets pages load",
+    "alerts-bell visible on authenticated pages; alerts-panel opens on click",
+    "/app/recurring add flow: rec-name/rec-amount/rec-submit successfully added row",
+    "recurring-run-all button works without error"
+  ],
+  "failed": [
+    {
+      "area": "Test spec vs API schema (informational, NOT a bug)",
+      "issue": "Review spec mentioned POST /api/lessons/complete with only lesson_id and POST /api/tax/estimate with gross_income; actual API requires 'score' for lessons and 'annual_income' for tax. Endpoints work correctly with proper payload.",
+      "evidence": "422 validation responses from both endpoints",
+      "priority": "LOW"
+    },
+    {
+      "area": "Budget alerts / inline card",
+      "issue": "budget-alerts-inline count=0 on /app/budgets — expected since seeded budget usage is below 60% threshold so alerts array is empty. Not a defect.",
+      "evidence": "GET /api/budget-alerts -> {alerts:[],count:0,critical:0}",
+      "priority": "LOW"
+    }
+  ],
+  "action_items": [
+    "None blocking. Optional: to visually verify inline budget alerts UI, seed a budget where spent>=60% of monthly_limit, or reduce Entertainment monthly_limit so ₹99/₹1500 exceeds threshold."
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "retest_needed": false,
+  "full_testing_deferred": true
+}
