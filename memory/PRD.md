@@ -49,6 +49,8 @@ Secondary: young families, self-employed, small business owners.
   - Weekly Money Recap (/app/recap) — saved/spent/budget %/goal progress/streak/health delta + copy-to-share; contributions now logged; health snapshots stored
   - Sidebar reorganized into Overview/Spend/Wealth/Grow sections
 - 2026-06: Coach Superpowers — AI Coach now receives a live financial snapshot (health breakdown, totals, net worth, investments, emergency fund, top Action Center insights) injected into every chat prompt; Coach page shows "Sees your live numbers" chip and dynamic suggestion chips built from the user's top insights. Verified multi-turn grounded replies with real numbers.
+- 2026-06: Coach Actions — coach replies now end with 1-3 tap-to-do buttons (LLM outputs ACTIONS JSON line, backend parses/whitelists routes, persisted with message, rendered in chat bubble). Verified live: "Pay ₹12,366 on HDFC Card →" button rendered and history persists actions.
+- 2026-06: Streak Boosters — daily check-in (POST /api/checkin, once per day): +10 NugPoints, +50 weekly milestone bonus, streak-saver pass earned every 7 days (max 3, auto-consumed to protect a 1-day miss). Header widget (StreakCheckin.jsx): "Check in · +10" button → flame streak chip + saver count. Verified: streak increment, duplicate blocked, status endpoint.
 
 ## Backlog / Roadmap
 - P1 (user-confirmed, later): Push Nudges — email/push reminders from Smart Alerts (retention; Phase 2)

@@ -1055,8 +1055,27 @@ COACH_SYSTEM = (
     "Rules: (1) Give clear, decisive answers in 2-4 short sentences. (2) Use ₹ and Indian context (SIP, PPF, NPS, HDFC, ICICI, Groww). "
     "(3) NEVER recommend specific stocks or crypto. (4) Nudge users toward saving, budgeting, investing in index funds/SIPs, killing high-APR debt. "
     "(5) Tone: like a smart friend — warm, honest, occasionally cheeky. No jargon. No disclaimers unless asked. "
-    "(6) You are given a LIVE FINANCIAL SNAPSHOT of this user. When their question touches money they actually have — spending, debts, goals, investments, emergency fund — ground your advice in those real numbers instead of generic advice."
+    "(6) You are given a LIVE FINANCIAL SNAPSHOT of this user. When their question touches money they actually have — spending, debts, goals, investments, emergency fund — ground your advice in those real numbers instead of generic advice. "
+    "(7) After your reply, output ONE final line exactly in this format: ACTIONS: [{\"label\": \"...\", \"route\": \"...\"}] — 1 to 3 short tap-to-do buttons that let the user act on your advice inside the app. "
+    "Allowed routes ONLY: /app/debts (debt payoff plan), /app/budgets, /app/goals, /app/investments (SIPs & portfolio), /app/emergency (emergency fund planner), /app/expenses, /app/networth, /app/learn (lessons), /app/tax, /app/recap. "
+    "Labels must be specific and include amounts when possible, e.g. \"Pay ₹2,000 extra on HDFC card\". If no action fits, output ACTIONS: []"
 )
+
+COACH_ACTION_ROUTES = {"/app/debts", "/app/budgets", "/app/goals", "/app/investments", "/app/emergency",
+                       "/app/expenses", "/app/networth", "/app/learn", "/app/tax", "/app/recap", "/app/actions"}
+
+def _parse_coach_actions(text: str):
+    m = re.search(r"ACTIONS:\s*(\[.*\])", text, re.S)
+    actions = []
+    if m:
+        try:
+            for a in json.loads(m.group(1))[:3]:
+                if isinstance(a, dict) and a.get("route") in COACH_ACTION_ROUTES and a.get("label"):
+                    actions.append({"label": str(a["label"])[:60], "route": a["route"]})
+        except Exception:
+            pass
+        text = text[:m.start()].rstrip().rstrip("`").rstrip()
+    return text, actions
 
 async def _coach_context(user: dict) -> str:
     hb = await health_breakdown(user=user)
@@ -1105,6 +1124,7 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
         + f"Conversation so far:\n{convo}\n\nRespond to the latest USER message as Nugvio Coach."
     )
     reply = "I'm here — ask me anything about money."
+    actions = []
     if EMERGENT_LLM_KEY:
         try:
             chat = LlmChat(
@@ -1114,14 +1134,15 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
             ).with_model("gemini", "gemini-3-flash-preview")
             res = await chat.send_message(UserMessage(text=prompt))
             reply = res if isinstance(res, str) else str(res)
+            reply, actions = _parse_coach_actions(reply)
         except Exception as e:
             logging.warning(f"Coach LLM failed: {e}")
             reply = "My brain is offline for a sec. Try again in a moment — meanwhile, what specific money question is on your mind?"
     await db.coach_messages.insert_one({
         "id": new_id(), "user_id": user["id"], "session_id": body.session_id,
-        "role": "coach", "text": reply, "at": now_iso()
+        "role": "coach", "text": reply, "actions": actions, "at": now_iso()
     })
-    return {"reply": reply}
+    return {"reply": reply, "actions": actions}
 
 @api.get("/coach/history")
 async def coach_history(session_id: str, user: dict = Depends(get_current_user)):
@@ -1464,6 +1485,60 @@ async def weekly_recap(user: dict = Depends(get_current_user)):
         "health_score": score,
         "health_delta": score_delta,
         "nug_points": user.get("nug_points", 0),
+    }
+
+# ------------------ STREAK CHECK-IN ------------------
+@api.post("/checkin")
+async def daily_checkin(user: dict = Depends(get_current_user)):
+    today = now_utc().date()
+    last = user.get("last_checkin")
+    if last == today.isoformat():
+        raise HTTPException(400, "Already checked in today")
+    streak = user.get("streak_days", 0)
+    savers = user.get("streak_savers", 0)
+    saver_used = False
+    if last:
+        gap = (today - datetime.fromisoformat(last).date()).days
+        if gap == 1:
+            streak += 1
+        elif gap == 2 and savers > 0:
+            savers -= 1
+            saver_used = True
+            streak += 1
+        else:
+            streak = 1
+    else:
+        streak += 1
+    milestone_bonus = 0
+    saver_earned = False
+    if streak % 7 == 0:
+        milestone_bonus = 50
+        if savers < 3:
+            savers += 1
+            saver_earned = True
+    total = 10 + milestone_bonus
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"streak_days": streak, "last_checkin": today.isoformat(), "streak_savers": savers},
+         "$inc": {"nug_points": total}})
+    note = f"Daily check-in (day {streak})" + (" + 7-day streak bonus" if milestone_bonus else "")
+    if saver_used:
+        note += " · streak-saver pass used"
+    await db.nug_events.insert_one({
+        "id": new_id(), "user_id": user["id"], "kind": "checkin",
+        "points": total, "note": note, "at": now_iso()})
+    return {"streak_days": streak, "points_earned": total, "milestone_bonus": milestone_bonus,
+            "saver_used": saver_used, "saver_earned": saver_earned, "streak_savers": savers}
+
+@api.get("/checkin/status")
+async def checkin_status(user: dict = Depends(get_current_user)):
+    today = now_utc().date().isoformat()
+    streak = user.get("streak_days", 0)
+    return {
+        "checked_in_today": user.get("last_checkin") == today,
+        "streak_days": streak,
+        "streak_savers": user.get("streak_savers", 0),
+        "next_milestone_in": (7 - (streak % 7)) if streak % 7 else 7,
     }
 
 # ------------------ SEED DEMO ------------------

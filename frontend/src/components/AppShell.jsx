@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { LOGO_URL } from "@/lib/api";
 import BudgetAlertsBell from "@/components/BudgetAlertsBell";
+import StreakCheckin from "@/components/StreakCheckin";
 import { LayoutDashboard, Receipt, PiggyBank, Target, MessageCircle, TrendingDown, GraduationCap, Calculator, LineChart, Gift, LogOut, Repeat, TrendingUp, Sparkles, Landmark, ShieldCheck, CalendarRange } from "lucide-react";
 
 const sections = [
@@ -77,7 +78,8 @@ export default function AppShell({ children }) {
         </div>
       </aside>
       <main className="flex-1 p-8 max-w-[1400px]">
-        <div className="flex justify-end mb-2">
+        <div className="flex justify-end items-center gap-3 mb-2">
+          <StreakCheckin />
           <BudgetAlertsBell />
         </div>
         {children}

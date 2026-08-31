@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Send, Bot, User, Sparkles } from "lucide-react";
 
@@ -11,6 +12,7 @@ const STATIC_SUGGESTIONS = [
 ];
 
 export default function Coach() {
+  const nav = useNavigate();
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -48,7 +50,7 @@ export default function Coach() {
     setBusy(true);
     try {
       const { data } = await api.post("/coach/chat", { session_id: sid, text });
-      setMsgs(m => [...m, { id: 'c'+Date.now(), role: 'coach', text: data.reply }]);
+      setMsgs(m => [...m, { id: 'c'+Date.now(), role: 'coach', text: data.reply, actions: data.actions }]);
     } catch {
       setMsgs(m => [...m, { id: 'e'+Date.now(), role: 'coach', text: "Something went wrong. Please retry." }]);
     } finally { setBusy(false); }
@@ -84,6 +86,15 @@ export default function Coach() {
             {m.role==='coach' && <div className="p-2 h-9 w-9 rounded-full bg-slate-100 flex items-center justify-center"><Bot size={16} color="#2563EB"/></div>}
             <div className={`max-w-[70%] p-4 rounded-2xl ${m.role==='user' ? 'bg-[var(--ink)] text-white rounded-br-sm' : 'bg-slate-50 border-l-4 border-[var(--orange)] rounded-bl-sm'}`}>
               <div className="text-sm whitespace-pre-wrap leading-relaxed">{m.text}</div>
+              {m.role==='coach' && m.actions?.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {m.actions.map((a, i) => (
+                    <button key={i} data-testid={`coach-action-${i}`} onClick={()=>nav(a.route)} className="pill-btn btn-primary text-xs">
+                      {a.label} →
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             {m.role==='user' && <div className="p-2 h-9 w-9 rounded-full bg-slate-100 flex items-center justify-center"><User size={16}/></div>}
           </div>
