@@ -1,0 +1,28 @@
+{
+  "summary": "Full E2E test of 7 new Nugvio features (Action Center, Health Score Breakdown, Emergency Fund, Net Worth, Smart Alerts, Goals Autopilot, Weekly Recap) plus regression smoke. Backend: 19/19 pytest tests pass covering auth-required (401), shape/sort of insights, health-breakdown 6 components with correct max weights (25/20/20/15/10/10 = 100), emergency months=3/6/12 changes recommended, net worth structure (manual+auto assets + auto-investments + auto-goals + liabilities, net_worth math verified), assets POST/PATCH/DELETE persistence, alerts levels ∈ {risk,spending,goal}, goals-autopilot PATCH with linked SIP updates committed_monthly, recap contribution increases 'saved'. Old /api/health-score legacy shape still returned. Frontend: all data-testids verified on Dashboard (act-now-btn, dash-boost-score), Action Center (action-insights, insight-*, action-btn-* navigates, score-breakdown, 6 score-comp-*, score-target-card, 3 score-action-*), Emergency (months buttons flip recommended 6mo ₹27,734 → 12mo ₹55,468, contribute increased current 40,000→40,100), Net Worth (add asset ₹93,660→₹1,43,660, edit via prompt→₹1,68,660, delete restores to ₹93,660, auto-investments/auto-goals rows shown, liabilities-list rendered), Alerts bell opens panel with 2 items, Goals autopilot (4 goals, saving commit ₹2500→₹5000 updates committed line), Recap all 6 rows render + share copies text. Sidebar sections show nav-actions/nav-networth/nav-emergency/nav-recap. Regression: Dashboard, Expenses, Budgets, Investments, Debts load without page errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Investments/Debts charts", "issues": ["Recharts logs width(-1)/height(-1) warnings on initial render before ResponsiveContainer measures - cosmetic only, charts render correctly (noted in iter_2)."]},
+      {"screen": "Goals - SIP <select>", "issues": ["React hydration warning 'In HTML, <span> cannot be a child of <option>' logged. Source code is clean (<option>{s.name} ({inr(...)})</option>); the offending <span> is injected by Emergent dev-instrumentation (data-ve-dynamic / x-excluded). Not a user-code bug and won't reach prod build, but noisy in dev console."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_new_features.py", "/app/test_reports/pytest/new_features.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now ~1605 lines. Splitting into router modules (auth, expenses, budgets, investments, goals, wealth, insights) is overdue.",
+    "Net worth response mixes shapes vs the review spec: it returns {assets:{manual,auto,total}, liabilities:{items,total}, net_worth} (nested), while the review request described flat 'assets' and 'liabilities' arrays. UI handles it, but keep API doc/spec in sync.",
+    "Health breakdown returns 'points/max/pct' per component; review request mentioned 'weight'. Naming is fine (points/max is clearer) but ensure any external clients or docs use the actual field names.",
+    "Recharts ResponsiveContainer parents should set explicit min-height so initial render doesn't log width/height(-1) warnings."
+  ],
+  "updated_files": ["/app/backend/tests/test_new_features.py"],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100%"},
+  "test_credentials": "demo@nugvio.in / Nugvio@123",
+  "seed_data_creation": "Used existing seed data. Test-created TEST_ASSET / TEST_ASSET_X / TEST_UI_ASSET were cleaned up during tests. Goal autopilot commit for first goal was left at ₹2,500-₹5,000 (non-destructive; can be re-saved).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 7 new features (Action Center, Health Breakdown, Emergency Fund, Net Worth, Smart Alerts, Goals Autopilot, Weekly Recap) verified end-to-end and passing. Backend tests: /app/backend/tests/test_new_features.py (19/19). Investments regression from iter_2 also still green. Note: /api/networth response is nested (assets.manual/auto/total, liabilities.items/total), not flat. Health breakdown uses points/max, not weight/score. Legacy /api/health-score still returns old shape. Login button is not type=submit — use get_by_role('button', name='Log in').",
+  "rca of the issue": "N/A - no functional issues found."
+}

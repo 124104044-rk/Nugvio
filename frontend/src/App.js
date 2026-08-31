@@ -18,6 +18,10 @@ import Tax from "@/pages/Tax";
 import Cashflow from "@/pages/Cashflow";
 import Rewards from "@/pages/Rewards";
 import Investments from "@/pages/Investments";
+import ActionCenter from "@/pages/ActionCenter";
+import NetWorth from "@/pages/NetWorth";
+import Emergency from "@/pages/Emergency";
+import Recap from "@/pages/Recap";
 
 function Protected({ children }) {
   const { user } = useAuth();
@@ -48,6 +52,10 @@ function App() {
             <Route path="/app/cashflow" element={<Protected><Cashflow /></Protected>} />
             <Route path="/app/rewards" element={<Protected><Rewards /></Protected>} />
             <Route path="/app/investments" element={<Protected><Investments /></Protected>} />
+            <Route path="/app/actions" element={<Protected><ActionCenter /></Protected>} />
+            <Route path="/app/networth" element={<Protected><NetWorth /></Protected>} />
+            <Route path="/app/emergency" element={<Protected><Emergency /></Protected>} />
+            <Route path="/app/recap" element={<Protected><Recap /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

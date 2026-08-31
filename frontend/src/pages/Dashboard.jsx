@@ -16,7 +16,7 @@ export default function Dashboard() {
   useEffect(() => {
     (async () => {
       const [s, n, c, g, e] = await Promise.all([
-        api.get("/health-score").then(r=>r.data),
+        api.get("/health-score/breakdown").then(r=>r.data),
         api.get("/nudges").then(r=>r.data),
         api.get("/cashflow/predict").then(r=>r.data),
         api.get("/goals").then(r=>r.data),
@@ -50,8 +50,8 @@ export default function Dashboard() {
               <div className="text-lg font-semibold mt-1">{nudges[0].title}</div>
               <div className="text-sm text-[var(--ink-soft)] mt-1">{nudges[0].message}</div>
             </div>
-            <Link to="/app/coach" className="pill-btn btn-primary text-sm inline-flex items-center gap-2" data-testid="ask-coach-btn">
-              Ask coach <ArrowRight size={16}/>
+            <Link to="/app/actions" className="pill-btn btn-primary text-sm inline-flex items-center gap-2" data-testid="act-now-btn">
+              Act now <ArrowRight size={16}/>
             </Link>
           </div>
         </div>
@@ -73,12 +73,13 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="text-6xl font-extrabold leading-none">{score?.overall ?? '–'}</div>
-              <div className="text-sm text-[var(--ink-soft)] mt-1">out of 100</div>
+              <div className="text-sm text-[var(--ink-soft)] mt-1">out of 100 · next stop {score?.target ?? 80}</div>
               <div className="mt-3 space-y-1 text-sm">
-                <div>Savings rate: <b>{score?.sub_scores?.savings_rate ?? 0}</b></div>
-                <div>Budget adherence: <b>{score?.sub_scores?.budget_adherence ?? 0}</b></div>
-                <div>Debt health: <b>{score?.sub_scores?.debt_health ?? 0}</b></div>
+                {(score?.components ?? []).slice(0, 3).map(c => (
+                  <div key={c.key} className="flex justify-between gap-6"><span>{c.label}</span><b>{c.points}/{c.max}</b></div>
+                ))}
               </div>
+              <Link to="/app/actions" className="text-sm font-semibold text-[var(--blue)] mt-2 inline-block" data-testid="dash-boost-score">Full breakdown →</Link>
             </div>
           </div>
         </div>

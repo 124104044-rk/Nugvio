@@ -176,6 +176,19 @@ class SIPUpdate(BaseModel):
     expected_return: Optional[float] = None
     active: Optional[bool] = None
 
+class AssetIn(BaseModel):
+    name: str
+    kind: Literal["Bank", "Savings", "Cash", "Other"]
+    value: float = Field(ge=0)
+
+class AssetUpdate(BaseModel):
+    name: Optional[str] = None
+    value: Optional[float] = None
+
+class GoalAutopilotIn(BaseModel):
+    monthly_commit: Optional[float] = Field(default=None, ge=0)
+    linked_sip_id: Optional[str] = None
+
 CATEGORIES = ["Food", "Travel", "Shopping", "Bills", "Healthcare", "Entertainment", "Rent", "Investments", "Other"]
 
 # ------------------ AUTH ------------------
@@ -362,6 +375,10 @@ async def contribute(gid: str, body: GoalContribute, user: dict = Depends(get_cu
             "id": new_id(), "user_id": user["id"], "kind": "goal_contribution",
             "points": pts, "note": f"Contributed ₹{body.amount} to {g['title']}", "at": now_iso()
         })
+    await db.contributions.insert_one({
+        "id": new_id(), "user_id": user["id"], "goal_id": gid,
+        "goal_title": g["title"], "amount": body.amount, "at": now_iso()
+    })
     return {"saved_amount": new_saved, "earned_points": pts}
 
 @api.delete("/goals/{gid}")
@@ -437,8 +454,34 @@ async def debt_strategy(user: dict = Depends(get_current_user), method: str = "a
     }
 
 # ------------------ HEALTH SCORE ------------------
-@api.get("/health-score")
-async def health_score(user: dict = Depends(get_current_user)):
+def _parse_dt(s):
+    try:
+        d = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d
+    except Exception:
+        return now_utc()
+
+SCORE_COMPONENTS = [
+    ("savings", "Savings", "savings_rate", 25),
+    ("spending", "Spending", "budget_adherence", 20),
+    ("debt", "Debt", "debt_health", 20),
+    ("emergency", "Emergency Fund", "emergency_fund", 15),
+    ("investments", "Investments", "investment_score", 10),
+    ("discipline", "Discipline", "discipline", 10),
+]
+
+SCORE_ACTIONS = {
+    "savings": {"title": "Boost your savings", "message": "Contribute to a goal this week — even ₹500 moves the needle.", "route": "/app/goals", "label": "Add to a goal"},
+    "spending": {"title": "Rein in spending", "message": "You're close to (or past) budget limits. Trim the top overspent category.", "route": "/app/budgets", "label": "Review budgets"},
+    "debt": {"title": "Attack high-interest debt", "message": "Put extra cash on your highest-APR debt using the Avalanche method.", "route": "/app/debts", "label": "Open debt plan"},
+    "emergency": {"title": "Grow your emergency fund", "message": "Your safety net is below target. Start a monthly top-up plan.", "route": "/app/emergency", "label": "Plan my fund"},
+    "investments": {"title": "Invest something monthly", "message": "Start or increase a SIP — consistency beats timing.", "route": "/app/investments", "label": "Set up SIP"},
+    "discipline": {"title": "Keep the streak alive", "message": "Log expenses daily and complete a lesson to build discipline.", "route": "/app/learn", "label": "Take a lesson"},
+}
+
+async def _health_data(user: dict):
     ym = now_utc().strftime("%Y-%m")
     exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
     goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
@@ -465,7 +508,7 @@ async def health_score(user: dict = Depends(get_current_user)):
     emergency_score = min(100, int(total_saved / 500))
     discipline = min(100, user.get("streak_days", 1) * 5)
 
-    overall = int(0.25 * savings_rate + 0.2 * budget_adherence + 0.2 * debt_health + 0.15 * investment_score + 0.1 * emergency_score + 0.1 * discipline)
+    overall = int(0.25 * savings_rate + 0.2 * budget_adherence + 0.2 * debt_health + 0.15 * emergency_score + 0.1 * investment_score + 0.1 * discipline)
     return {
         "overall": overall,
         "sub_scores": {
@@ -482,6 +525,26 @@ async def health_score(user: dict = Depends(get_current_user)):
             "total_debt": round(total_debt, 2),
         }
     }
+
+@api.get("/health-score")
+async def health_score(user: dict = Depends(get_current_user)):
+    return await _health_data(user)
+
+@api.get("/health-score/breakdown")
+async def health_breakdown(user: dict = Depends(get_current_user)):
+    d = await _health_data(user)
+    comps = []
+    for key, label, sub_key, mx in SCORE_COMPONENTS:
+        pts = round(d["sub_scores"][sub_key] / 100 * mx)
+        comps.append({"key": key, "label": label, "points": pts, "max": mx, "pct": round(pts / mx * 100)})
+    overall = d["overall"]
+    target = min(100, ((overall // 10) + 1) * 10)
+    weakest = sorted(comps, key=lambda c: c["pct"])[:3]
+    actions = []
+    for c in weakest:
+        a = SCORE_ACTIONS[c["key"]]
+        actions.append({**a, "component": c["label"], "potential_gain": c["max"] - c["points"]})
+    return {"overall": overall, "target": target, "components": comps, "actions": actions, "totals": d["totals"]}
 
 # ------------------ NUDGES ------------------
 @api.get("/nudges")
@@ -831,13 +894,15 @@ async def cashflow_predict(user: dict = Depends(get_current_user)):
     exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
     # avg daily spend last 30 days
     cutoff = now_utc() - timedelta(days=30)
-    recent = [e for e in exps if datetime.fromisoformat(e["date"].replace("Z", "+00:00")) >= cutoff] if exps else []
+    recent = [e for e in exps if _parse_dt(e["date"]) >= cutoff] if exps else []
     total = sum(e["amount"] for e in recent)
-    days = max(1, len(set(e["date"][:10] for e in recent))) if recent else 30
+    days = max(1, len(set(str(e["date"])[:10] for e in recent))) if recent else 30
     avg_daily = total / days if recent else 300
     # 30-day forecast
     forecast = []
-    starting = 30000.0  # illustrative opening balance
+    assets = await db.assets.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    bank = sum(a["value"] for a in assets if a.get("kind") in ("Bank", "Cash", "Savings"))
+    starting = bank if bank > 0 else 30000.0
     bal = starting
     warnings = []
     for i in range(1, 31):
@@ -1033,6 +1098,342 @@ async def coach_history(session_id: str, user: dict = Depends(get_current_user))
     ).sort("at", 1).to_list(200)
     return msgs
 
+# ------------------ GOAL PACE / AUTOPILOT ------------------
+def _goal_pace(g: dict):
+    target_dt = _parse_dt(g.get("target_date"))
+    created = _parse_dt(g.get("created_at"))
+    now = now_utc()
+    total_days = max(1, (target_dt - created).days)
+    elapsed = min(total_days, max(0, (now - created).days))
+    days_left = max(0, (target_dt - now).days)
+    target = g["target_amount"]
+    saved = g.get("saved_amount", 0)
+    expected = target * elapsed / total_days
+    variance = saved - expected
+    monthly_pace = target / max(1, total_days / 30.44)
+    months_off = round(variance / monthly_pace, 1) if monthly_pace else 0
+    remaining = max(0, target - saved)
+    required_monthly = remaining / max(0.5, days_left / 30.44) if days_left > 0 else remaining
+    if variance >= 0.05 * target:
+        status = "ahead"
+    elif variance <= -0.05 * target:
+        status = "behind"
+    else:
+        status = "on_track"
+    return {
+        "expected_saved": round(expected, 2), "variance": round(variance, 2),
+        "months_off": months_off, "required_monthly": round(required_monthly, 2),
+        "days_left": days_left, "status": status,
+    }
+
+@api.get("/goals-autopilot")
+async def goals_autopilot(user: dict = Depends(get_current_user)):
+    goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    sips = await db.sips.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    sip_map = {s["id"]: s for s in sips}
+    out = []
+    for g in goals:
+        pace = _goal_pace(g)
+        commit = g.get("monthly_commit") or 0
+        sip = sip_map.get(g.get("linked_sip_id"))
+        sip_amt = sip["monthly_amount"] if sip and sip.get("active", True) else 0
+        committed = commit + sip_amt
+        remaining = max(0, g["target_amount"] - g.get("saved_amount", 0))
+        months_left = pace["days_left"] / 30.44
+        projected_delay = None
+        if committed > 0 and remaining > 0:
+            projected_delay = round(remaining / committed - months_left, 1)
+        out.append({
+            **{k: g.get(k) for k in ("id", "title", "target_amount", "saved_amount", "target_date")},
+            **pace,
+            "monthly_commit": commit,
+            "linked_sip_id": g.get("linked_sip_id"),
+            "linked_sip_name": sip["name"] if sip else None,
+            "committed_monthly": round(committed, 2),
+            "projected_delay_months": projected_delay,
+        })
+    active_sips = [{"id": s["id"], "name": s["name"], "monthly_amount": s["monthly_amount"]} for s in sips if s.get("active", True)]
+    return {"goals": out, "sips": active_sips}
+
+@api.patch("/goals/{gid}/autopilot")
+async def set_goal_autopilot(gid: str, body: GoalAutopilotIn, user: dict = Depends(get_current_user)):
+    g = await db.goals.find_one({"id": gid, "user_id": user["id"]})
+    if not g:
+        raise HTTPException(404, "Goal not found")
+    updates = {}
+    if body.monthly_commit is not None:
+        updates["monthly_commit"] = body.monthly_commit
+    if body.linked_sip_id is not None:
+        updates["linked_sip_id"] = body.linked_sip_id or None
+    if updates:
+        await db.goals.update_one({"id": gid}, {"$set": updates})
+    return {"ok": True}
+
+# ------------------ EMERGENCY FUND ------------------
+ESSENTIAL_CATS = {"Rent", "Bills", "Food", "Healthcare"}
+
+async def _emergency_stats(user: dict, months: int = 6):
+    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    cutoff = now_utc() - timedelta(days=90)
+    ess = [e for e in exps if e.get("category") in ESSENTIAL_CATS and _parse_dt(e.get("date")) >= cutoff]
+    monthly_essentials = sum(e["amount"] for e in ess) / 3 if ess else 0
+    if monthly_essentials == 0:
+        ym = now_utc().strftime("%Y-%m")
+        monthly_essentials = sum(e["amount"] for e in exps if str(e.get("date", ""))[:7] == ym)
+    goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    ef_goal = next((g for g in goals if "emergency" in g["title"].lower()), None)
+    current = ef_goal.get("saved_amount", 0) if ef_goal else 0
+    recommended = monthly_essentials * months
+    gap = max(0, recommended - current)
+    return {
+        "monthly_essentials": round(monthly_essentials, 2),
+        "months": months,
+        "recommended": round(recommended, 2),
+        "current": round(current, 2),
+        "gap": round(gap, 2),
+        "coverage_pct": round(min(100, (current / recommended * 100) if recommended else 100), 1),
+        "goal_id": ef_goal["id"] if ef_goal else None,
+        "goal_title": ef_goal["title"] if ef_goal else None,
+    }
+
+@api.get("/emergency-fund")
+async def emergency_fund(user: dict = Depends(get_current_user), months: int = 6):
+    months = max(3, min(12, months))
+    stats = await _emergency_stats(user, months)
+    plans = [{"months": m, "monthly_saving": round(stats["gap"] / m, 2)} for m in (6, 12, 18)] if stats["gap"] > 0 else []
+    return {**stats, "plans": plans}
+
+# ------------------ NET WORTH & ASSETS ------------------
+@api.get("/assets")
+async def list_assets(user: dict = Depends(get_current_user)):
+    return await db.assets.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+
+@api.post("/assets")
+async def add_asset(body: AssetIn, user: dict = Depends(get_current_user)):
+    doc = {"id": new_id(), "user_id": user["id"], **body.model_dump(), "created_at": now_iso()}
+    await db.assets.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.patch("/assets/{aid}")
+async def update_asset(aid: str, body: AssetUpdate, user: dict = Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await db.assets.update_one({"id": aid, "user_id": user["id"]}, {"$set": updates})
+    return {"ok": True}
+
+@api.delete("/assets/{aid}")
+async def del_asset(aid: str, user: dict = Depends(get_current_user)):
+    await db.assets.delete_one({"id": aid, "user_id": user["id"]})
+    return {"ok": True}
+
+@api.get("/networth")
+async def networth(user: dict = Depends(get_current_user)):
+    assets = await db.assets.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    holdings = await db.holdings.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    invest_value = sum(h["units"] * h["current_price"] for h in holdings)
+    goal_savings = sum(g.get("saved_amount", 0) for g in goals)
+    auto_assets = []
+    if invest_value > 0:
+        auto_assets.append({"id": "auto-investments", "name": "Investment portfolio", "kind": "Investments", "value": round(invest_value, 2), "auto": True})
+    if goal_savings > 0:
+        auto_assets.append({"id": "auto-goals", "name": "Goal savings", "kind": "Savings", "value": round(goal_savings, 2), "auto": True})
+    manual_total = sum(a["value"] for a in assets)
+    assets_total = manual_total + invest_value + goal_savings
+    liabilities = [{"id": d["id"], "name": d["name"], "value": d["balance"], "apr": d.get("apr")} for d in debts]
+    liab_total = sum(d["balance"] for d in debts)
+    return {
+        "assets": {"manual": assets, "auto": auto_assets, "total": round(assets_total, 2)},
+        "liabilities": {"items": liabilities, "total": round(liab_total, 2)},
+        "net_worth": round(assets_total - liab_total, 2),
+    }
+
+# ------------------ SMART ALERTS ------------------
+@api.get("/alerts")
+async def smart_alerts(user: dict = Depends(get_current_user)):
+    alerts = []
+    cf = await cashflow_predict(user=user)
+    for w in cf.get("warnings", [])[:1]:
+        dstr = (now_utc() + timedelta(days=w["day"])).strftime("%b %d")
+        alerts.append({"id": "risk-balance", "level": "risk", "title": "Balance risk ahead",
+                       "message": f"Your balance may fall below ₹2,000 around {dstr}.", "route": "/app/cashflow"})
+    ba = await budget_alerts(user=user)
+    for a in ba["alerts"]:
+        if a["level"] == "exceeded":
+            alerts.append({"id": a["id"], "level": "risk", "title": f"{a['category']} budget exceeded",
+                           "message": a["message"], "route": "/app/budgets", "pct": a["pct"]})
+        elif a["level"] == "warning":
+            alerts.append({"id": a["id"], "level": "spending", "title": f"{a['category']} budget at {int(a['pct'])}%",
+                           "message": a["message"], "route": "/app/budgets", "pct": a["pct"]})
+    goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    for g in goals:
+        pace = _goal_pace(g)
+        if pace["status"] == "ahead" and pace["variance"] > 0.02 * g["target_amount"]:
+            alerts.append({"id": f"goal-win-{g['id']}", "level": "goal", "title": f"'{g['title']}' is ahead of schedule",
+                           "message": f"You've saved ₹{int(pace['variance'])} more than required so far. Keep it up.", "route": "/app/goals"})
+    week_ago = now_utc() - timedelta(days=7)
+    contribs = await db.contributions.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
+    saved_week = sum(c["amount"] for c in contribs if _parse_dt(c["at"]) >= week_ago)
+    if saved_week > 0:
+        alerts.append({"id": "goal-week-save", "level": "goal", "title": "Great saving week",
+                       "message": f"You put ₹{int(saved_week)} toward your goals in the last 7 days.", "route": "/app/recap"})
+    order = {"risk": 0, "spending": 1, "goal": 2}
+    alerts.sort(key=lambda a: order.get(a["level"], 3))
+    return {"alerts": alerts, "count": len(alerts), "critical": sum(1 for a in alerts if a["level"] == "risk")}
+
+# ------------------ AI ACTION CENTER ------------------
+@api.get("/action-center")
+async def action_center(user: dict = Depends(get_current_user)):
+    now = now_utc()
+    ym = now.strftime("%Y-%m")
+    last_ym = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    budgets = await db.budgets.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    sips = await db.sips.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    insights = []
+
+    cur, prev = {}, {}
+    for e in exps:
+        m = str(e.get("date", ""))[:7]
+        if m == ym:
+            cur[e["category"]] = cur.get(e["category"], 0) + e["amount"]
+        elif m == last_ym:
+            prev[e["category"]] = prev.get(e["category"], 0) + e["amount"]
+    for cat, amt in cur.items():
+        p = prev.get(cat, 0)
+        if p >= 200 and amt >= 500 and amt > p * 1.25:
+            pct = round((amt - p) / p * 100)
+            insights.append({"id": f"spike-{cat}", "severity": "medium",
+                             "title": f"Your {cat} spending is {pct}% higher this month",
+                             "message": f"₹{int(amt)} so far vs ₹{int(p)} last month. Worth a quick look at where it went.",
+                             "action_label": "Review expenses", "route": "/app/expenses"})
+
+    over, near = [], []
+    for b in budgets:
+        spent = cur.get(b["category"], 0)
+        pct = (spent / b["monthly_limit"] * 100) if b["monthly_limit"] else 0
+        if spent > b["monthly_limit"]:
+            over.append((b["category"], spent - b["monthly_limit"]))
+        elif pct >= 85:
+            near.append((b["category"], pct))
+    if over:
+        total_over = sum(o[1] for o in over)
+        cats = ", ".join(o[0] for o in over[:3])
+        insights.append({"id": "save-potential", "severity": "high",
+                         "title": f"You can save ₹{int(total_over)} this month",
+                         "message": f"You're over budget on {cats}. Pausing non-essentials there gets you back on track.",
+                         "action_label": "Fix budgets", "route": "/app/budgets"})
+    for cat, pct in near:
+        insights.append({"id": f"near-{cat}", "severity": "medium",
+                         "title": f"You've used {int(pct)}% of your {cat} budget",
+                         "message": "Slow down here for the rest of the month to stay green.",
+                         "action_label": "See budget", "route": "/app/budgets"})
+
+    ef = await _emergency_stats(user)
+    if ef["gap"] > 0:
+        sev = "high" if ef["current"] < ef["recommended"] * 0.5 else "medium"
+        insights.append({"id": "emergency-gap", "severity": sev,
+                         "title": "Your emergency fund is below your target",
+                         "message": f"You have ₹{int(ef['current'])} of the recommended ₹{int(ef['recommended'])} ({ef['coverage_pct']}%). Gap: ₹{int(ef['gap'])}.",
+                         "action_label": "Plan my fund", "route": "/app/emergency"})
+
+    for g in goals:
+        pace = _goal_pace(g)
+        if pace["status"] == "behind" and pace["months_off"] <= -1:
+            insights.append({"id": f"goal-behind-{g['id']}", "severity": "high",
+                             "title": f"On track to miss '{g['title']}' by {abs(int(round(pace['months_off'])))} months",
+                             "message": f"Save ₹{int(pace['required_monthly'])}/month from now to still hit the deadline.",
+                             "action_label": "Open goal", "route": "/app/goals"})
+        elif pace["status"] == "ahead" and pace["variance"] > 0.02 * g["target_amount"]:
+            insights.append({"id": f"goal-ahead-{g['id']}", "severity": "win",
+                             "title": f"'{g['title']}' is ahead of schedule",
+                             "message": f"₹{int(pace['variance'])} ahead of pace. Discipline pays.",
+                             "action_label": "View goals", "route": "/app/goals"})
+
+    high_apr = [d for d in debts if d.get("apr", 0) >= 20]
+    if high_apr:
+        d = max(high_apr, key=lambda x: x["apr"])
+        monthly_interest = d["balance"] * d["apr"] / 100 / 12
+        insights.append({"id": f"debt-{d['id']}", "severity": "high",
+                         "title": f"'{d['name']}' is costing you ₹{int(monthly_interest)}/month in interest",
+                         "message": f"{d['apr']}% APR on ₹{int(d['balance'])}. Every extra rupee here beats any investment.",
+                         "action_label": "Kill this debt", "route": "/app/debts"})
+
+    if not any(s.get("active", True) for s in sips):
+        insights.append({"id": "no-sip", "severity": "low",
+                         "title": "No active SIP running",
+                         "message": "Even ₹500/month compounds into lakhs. Start small, start now.",
+                         "action_label": "Start a SIP", "route": "/app/investments"})
+
+    if not insights:
+        insights.append({"id": "all-clear", "severity": "win",
+                         "title": "All clear today",
+                         "message": "Budgets healthy, goals on pace, no risks detected. Enjoy it — that's rare.",
+                         "action_label": "See recap", "route": "/app/recap"})
+
+    order = {"high": 0, "medium": 1, "low": 2, "win": 3}
+    insights.sort(key=lambda i: order.get(i["severity"], 4))
+    counts = {k: sum(1 for i in insights if i["severity"] == k) for k in ("high", "medium", "low", "win")}
+    return {"insights": insights[:12], "counts": counts, "generated_at": now_iso()}
+
+# ------------------ WEEKLY RECAP ------------------
+@api.get("/recap/weekly")
+async def weekly_recap(user: dict = Depends(get_current_user)):
+    now = now_utc()
+    wk = now - timedelta(days=7)
+    prev_wk = now - timedelta(days=14)
+    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    week_exps = [e for e in exps if _parse_dt(e.get("date")) >= wk]
+    prev_exps = [e for e in exps if prev_wk <= _parse_dt(e.get("date")) < wk]
+    spent_week = sum(e["amount"] for e in week_exps)
+    spent_prev = sum(e["amount"] for e in prev_exps)
+    by_cat = {}
+    for e in week_exps:
+        by_cat[e["category"]] = by_cat.get(e["category"], 0) + e["amount"]
+    top_cat = max(by_cat.items(), key=lambda x: x[1]) if by_cat else None
+
+    contribs = await db.contributions.find({"user_id": user["id"]}, {"_id": 0}).to_list(500)
+    saved_week = sum(c["amount"] for c in contribs if _parse_dt(c["at"]) >= wk)
+
+    ym = now.strftime("%Y-%m")
+    budgets = await db.budgets.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    total_limit = sum(b["monthly_limit"] for b in budgets)
+    month_spend_budgeted = sum(e["amount"] for e in exps if str(e.get("date", ""))[:7] == ym and e["category"] in {b["category"] for b in budgets})
+    budget_used_pct = round(month_spend_budgeted / total_limit * 100, 1) if total_limit else None
+
+    goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    total_target = sum(g["target_amount"] for g in goals)
+    goal_delta_pct = round(saved_week / total_target * 100, 1) if total_target else 0
+
+    health = await _health_data(user)
+    score = health["overall"]
+    today = now.date().isoformat()
+    snaps = await db.health_snapshots.find({"user_id": user["id"]}, {"_id": 0}).sort("date", -1).to_list(60)
+    prev_snap = next((s for s in snaps if s["date"] <= (now - timedelta(days=6)).date().isoformat()), None)
+    score_delta = (score - prev_snap["score"]) if prev_snap else None
+    await db.health_snapshots.update_one(
+        {"user_id": user["id"], "date": today},
+        {"$set": {"score": score, "user_id": user["id"], "date": today}}, upsert=True)
+
+    return {
+        "period": {"from": wk.date().isoformat(), "to": now.date().isoformat()},
+        "saved": round(saved_week, 2),
+        "spent": round(spent_week, 2),
+        "spent_prev_week": round(spent_prev, 2),
+        "spend_delta": round(spent_week - spent_prev, 2),
+        "top_category": {"name": top_cat[0], "amount": round(top_cat[1], 2)} if top_cat else None,
+        "budget_used_pct": budget_used_pct,
+        "goal_progress_pct": goal_delta_pct,
+        "streak_days": user.get("streak_days", 0),
+        "health_score": score,
+        "health_delta": score_delta,
+        "nug_points": user.get("nug_points", 0),
+    }
+
 # ------------------ SEED DEMO ------------------
 async def seed_demo():
     admin_email = os.environ.get("ADMIN_EMAIL", "demo@nugvio.in")
@@ -1148,6 +1549,26 @@ async def seed_investments_demo():
             "active": True, "created_at": now_iso()
         })
 
+async def seed_wealth_demo():
+    admin_email = os.environ.get("ADMIN_EMAIL", "demo@nugvio.in")
+    u = await db.users.find_one({"email": admin_email})
+    if not u:
+        return
+    if not await db.assets.find_one({"user_id": u["id"]}):
+        for name, kind, val in [("HDFC Savings Account", "Bank", 42000), ("Cash in hand", "Cash", 2500)]:
+            await db.assets.insert_one({"id": new_id(), "user_id": u["id"], "name": name, "kind": kind, "value": val, "created_at": now_iso()})
+    if not await db.contributions.find_one({"user_id": u["id"]}):
+        goals = await db.goals.find({"user_id": u["id"]}, {"_id": 0}).to_list(10)
+        for i, g in enumerate(goals[:2]):
+            await db.contributions.insert_one({
+                "id": new_id(), "user_id": u["id"], "goal_id": g["id"], "goal_title": g["title"],
+                "amount": 1200 + i * 800, "at": (now_utc() - timedelta(days=2 + i * 2)).isoformat()
+            })
+    if not await db.health_snapshots.find_one({"user_id": u["id"]}):
+        await db.health_snapshots.insert_one({
+            "user_id": u["id"], "date": (now_utc() - timedelta(days=8)).date().isoformat(), "score": 68
+        })
+
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
@@ -1160,6 +1581,7 @@ async def startup():
     await seed_demo()
     await seed_recurring_demo()
     await seed_investments_demo()
+    await seed_wealth_demo()
 
 @app.on_event("shutdown")
 async def shutdown():

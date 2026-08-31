@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef } from "react";
 import { api } from "@/lib/api";
-import { Bell, AlertTriangle, TriangleAlert, Info } from "lucide-react";
+import { Bell, ShieldAlert, AlertTriangle, PartyPopper } from "lucide-react";
 import { Link } from "react-router-dom";
 
 const LEVEL = {
-  exceeded: { icon: TriangleAlert, cls: "nudge-red", color: "#F43F5E", label: "Exceeded" },
-  warning:  { icon: AlertTriangle, cls: "nudge-orange", color: "#F97316", label: "Warning" },
-  info:     { icon: Info, cls: "nudge-blue", color: "#2563EB", label: "Heads up" },
+  risk: { icon: ShieldAlert, cls: "nudge-red", color: "#F43F5E", label: "Risk" },
+  spending: { icon: AlertTriangle, cls: "nudge-orange", color: "#F97316", label: "Spending" },
+  goal: { icon: PartyPopper, cls: "nudge-green", color: "#16A34A", label: "Win" },
 };
 
 export default function BudgetAlertsBell() {
@@ -15,7 +15,7 @@ export default function BudgetAlertsBell() {
   const ref = useRef(null);
 
   const load = async () => {
-    try { setData((await api.get("/budget-alerts")).data); } catch {}
+    try { setData((await api.get("/alerts")).data); } catch {}
   };
   useEffect(() => {
     load();
@@ -42,31 +42,28 @@ export default function BudgetAlertsBell() {
       {open && (
         <div className="absolute right-0 mt-2 w-96 card p-4 z-40 bg-white shadow-xl" data-testid="alerts-panel" style={{boxShadow: '0 20px 40px -12px rgba(15,23,42,0.25)'}}>
           <div className="flex items-center justify-between mb-3">
-            <div className="font-semibold">Budget Alerts</div>
-            <Link to="/app/budgets" className="text-xs font-semibold text-[var(--blue)]" onClick={()=>setOpen(false)}>Manage →</Link>
+            <div className="font-semibold">Smart Alerts</div>
+            <Link to="/app/actions" className="text-xs font-semibold text-[var(--blue)]" onClick={()=>setOpen(false)}>Action Center →</Link>
           </div>
           {data.alerts.length === 0 && (
-            <div className="text-sm text-[var(--ink-soft)] py-4 text-center">All good. No budgets at risk this month.</div>
+            <div className="text-sm text-[var(--ink-soft)] py-4 text-center">All quiet. No risks, no breaches.</div>
           )}
           <div className="space-y-2 max-h-80 overflow-y-auto">
             {data.alerts.map(a => {
-              const L = LEVEL[a.level] || LEVEL.info;
+              const L = LEVEL[a.level] || LEVEL.spending;
               return (
-                <div key={a.id} className={`p-3 rounded-xl ${L.cls}`} data-testid={`alert-${a.category}`}>
+                <Link to={a.route || "/app/actions"} key={a.id} onClick={()=>setOpen(false)} className={`block p-3 rounded-xl ${L.cls}`} data-testid={`alert-${a.id}`}>
                   <div className="flex items-start gap-2">
                     <L.icon size={16} color={L.color} className="mt-0.5"/>
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
-                        <div className="font-semibold text-sm">{a.category}</div>
-                        <div className="text-xs font-bold" style={{color: L.color}}>{Math.round(a.pct)}%</div>
+                        <div className="font-semibold text-sm">{a.title}</div>
+                        <div className="text-[10px] font-bold uppercase tracking-wider" style={{color: L.color}}>{L.label}</div>
                       </div>
                       <div className="text-xs text-[var(--ink-soft)] mt-0.5">{a.message}</div>
-                      <div className="mt-2 h-1.5 rounded-full bg-white border border-[var(--border)]">
-                        <div className="h-full rounded-full" style={{width:`${Math.min(100, a.pct)}%`, background: L.color}}/>
-                      </div>
                     </div>
                   </div>
-                </div>
+                </Link>
               );
             })}
           </div>

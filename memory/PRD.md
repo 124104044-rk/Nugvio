@@ -39,6 +39,15 @@ Secondary: young families, self-employed, small business owners.
 - 2026-01: MVP built end-to-end — auth, all 10 feature areas, seeded demo data, live LLM coach
 - 2026-01: Added Budget Alerts (dedicated endpoint + top-right bell + inline banner on Budgets) and Recurring Transactions tracker (CRUD, pause/resume, post-now, run-all-due, 5 seeded samples)
 - 2026-06: Investment Dashboard shipped — portfolio holdings tracker (MF/Stock/Gold/FD/Bond/Crypto, CRUD + price update), SIP tracker (CRUD, pause/resume), summary stats (invested/current/gain/monthly SIP), allocation breakdown with best/worst performers, 10-year compounding SIP projection chart, seeded demo data. E2E tested 100% (iteration_2.json)
+- 2026-06: Financial OS upgrade shipped (7 features, E2E tested 100% - iteration_3.json):
+  - AI Action Center (/app/actions) — "What should I do today?" insights (spending spikes, savings potential, emergency gap, goal misses, debt interest cost, no-SIP), each with an Action button
+  - Health Score Breakdown — component points (Savings/25, Spending/20, Debt/20, Emergency/15, Investments/10, Discipline/10) + "Get to {target}" top-3 actions; weights updated (emergency 15%, investments 10%)
+  - Emergency Fund Planner (/app/emergency) — essentials calc, 3-12 month cushion selector, gap, 6/12/18-month saving plans, goal create/top-up
+  - Net Worth Dashboard (/app/networth) — manual assets (bank/cash) CRUD + auto-pulled investments & goal savings vs debts; cashflow forecast now starts from real bank balance
+  - Smart Alerts — unified bell (Red risk / Yellow spending / Green wins) via /api/alerts
+  - Goal Autopilot — monthly commit + SIP linking per goal, ahead/on-track/behind status, projected delay
+  - Weekly Money Recap (/app/recap) — saved/spent/budget %/goal progress/streak/health delta + copy-to-share; contributions now logged; health snapshots stored
+  - Sidebar reorganized into Overview/Spend/Wealth/Grow sections
 
 ## Backlog / Roadmap
 - P1: CSV/statement upload with AI parse; Retirement Planner; Family Dashboard
@@ -47,6 +56,6 @@ Secondary: young families, self-employed, small business owners.
 - P4: Streaming AI Coach via SSE (currently non-streaming); Push notifications for nudges
 
 ## Next Action Items
-- NugPoints redemption store polish (P1)
-- AI Cash Flow prediction improvements (P1)
-- Add unit tests for tax calculator edge cases
+- Rewards Store partner perks polish (user: add after real users)
+- CSV/statement upload with AI parse (P1)
+- Split server.py into router modules (tech debt, ~1600 lines)
