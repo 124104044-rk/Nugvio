@@ -8,10 +8,10 @@ export default function Landing() {
       {/* Nav */}
       <header className="max-w-7xl mx-auto px-6 py-6 flex items-center justify-between">
         <div className="flex items-center gap-2" data-testid="landing-logo">
-          <img src={LOGO_URL} alt="Nugvio" className="h-11 w-auto" />
+          <img src={LOGO_URL} alt="NugVio" className="h-11 w-auto" />
         </div>
         <nav className="hidden md:flex items-center gap-1">
-          <a href="#why" className="nav-link">Why Nugvio</a>
+          <a href="#why" className="nav-link">Why NugVio</a>
           <a href="#features" className="nav-link">Features</a>
           <a href="#rewards" className="nav-link">Rewards</a>
           <a href="#pricing" className="nav-link">Pricing</a>
@@ -36,7 +36,7 @@ export default function Landing() {
             nudge the youth →
           </p>
           <p className="mt-6 text-lg text-[var(--ink-soft)] max-w-xl leading-relaxed">
-            Nugvio isn't another expense tracker. It's an AI coach that tells you what to do next with your money —
+            NugVio isn't another expense tracker. It's an AI coach that tells you what to do next with your money —
             and rewards you for saving, budgeting and investing. Not for spending.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
@@ -99,7 +99,7 @@ export default function Landing() {
       {/* Why */}
       <section id="why" className="bg-white border-y border-[var(--border)]">
         <div className="max-w-7xl mx-auto px-6 py-20">
-          <h2 className="text-4xl font-bold max-w-3xl">Every other app tells you <span className="line-through text-[var(--ink-soft)]">what happened</span>. Nugvio tells you what to do next.</h2>
+          <h2 className="text-4xl font-bold max-w-3xl">Every other app tells you <span className="line-through text-[var(--ink-soft)]">what happened</span>. NugVio tells you what to do next.</h2>
           <div className="grid md:grid-cols-4 gap-5 mt-10">
             {[
               {i: Bot, c: 'var(--blue)', t: "AI Coach", d: "Ask 'Should I invest?' in plain English. Get honest answers, not jargon."},
@@ -127,7 +127,7 @@ export default function Landing() {
           {[
             {t:"Smart Expenses", d:"Type 'Zomato 340' — AI categorizes it. No forms."},
             {t:"Budget Planner", d:"Category-wise limits with live alerts before you overshoot."},
-            {t:"Goal Planner", d:"Laptop, MBA, Bali. Nugvio tells you the monthly SIP needed."},
+            {t:"Goal Planner", d:"Laptop, MBA, Bali. NugVio tells you the monthly SIP needed."},
             {t:"Debt Optimizer", d:"Snowball or Avalanche? See how much you'd save either way."},
             {t:"Tax Assistant", d:"Compare Old vs New regime in seconds. Educational only."},
             {t:"Cashflow Predict", d:"30-day forecast — spot the shortage before it hits."},
@@ -151,7 +151,7 @@ export default function Landing() {
             <h2 className="text-4xl font-bold" style={{color:'#fff'}}>Rewards for the boring stuff.</h2>
             <p className="text-slate-300 mt-4 max-w-lg">
               Save ₹1,000? Earn NugPoints. Complete a lesson? More points. Pay a bill on time? More.
-              Redeem for Amazon, BookMyShow, Myntra, IRCTC or Nugvio Premium.
+              Redeem for Amazon, BookMyShow, Myntra, IRCTC or NugVio Premium.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -159,7 +159,7 @@ export default function Landing() {
               {b:"Amazon", t:"₹100 voucher", p:500},
               {b:"BookMyShow", t:"2 tickets", p:1200},
               {b:"Myntra", t:"₹200 credit", p:800},
-              {b:"Nugvio", t:"1M Premium", p:1500},
+              {b:"NugVio", t:"1M Premium", p:1500},
             ].map((r,i)=>(
               <div key={i} className="p-5 rounded-2xl bg-[#0F172A] border border-slate-700">
                 <div className="text-sm text-slate-400">{r.b}</div>
@@ -208,7 +208,7 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-6 py-10 flex items-center justify-between text-sm text-[var(--ink-soft)]">
           <div className="flex items-center gap-2">
             <img src={LOGO_URL} className="h-7 w-auto" alt=""/>
-            <span>© 2026 Nugvio · Nudge The Youth</span>
+            <span>© 2026 NugVio · Nudge The Youth</span>
           </div>
           <div>Not a bank. Educational content only.</div>
         </div>

@@ -35,7 +35,7 @@ export default function Budgets() {
     <div className="space-y-6">
       <div>
         <h1 className="text-4xl font-bold">Budgets</h1>
-        <p className="text-[var(--ink-soft)] mt-1">Set a ceiling per category. Nugvio will nudge you before you overshoot.</p>
+        <p className="text-[var(--ink-soft)] mt-1">Set a ceiling per category. NugVio will nudge you before you overshoot.</p>
       </div>
 
       {alerts.length > 0 && (

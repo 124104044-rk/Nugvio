@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { inr } from "@/lib/currency";
 import { toast } from "sonner";
 import { Plus, Trash2, Play, Pause, TrendingUp, TrendingDown, Wallet, PieChart } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 
 const KINDS = ["MF", "Stock", "Gold", "FD", "Bond", "Crypto"];
 const KIND_COLOR = { MF: "#2563EB", Stock: "#F97316", Gold: "#EAB308", FD: "#16A34A", Bond: "#0EA5E9", Crypto: "#A855F7" };
-const inr = (n) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 export default function Investments() {
   const [summary, setSummary] = useState(null);
@@ -169,7 +169,8 @@ export default function Investments() {
             <button data-testid="holding-submit" className="pill-btn btn-primary md:col-span-1 flex items-center justify-center"><Plus size={16} /></button>
           </form>
 
-          <div className="card p-0 overflow-hidden" data-testid="holdings-list">
+          <div className="card p-0 overflow-x-auto" data-testid="holdings-list">
+            <div className="min-w-[760px]">
             <div className="grid grid-cols-12 gap-2 p-4 text-xs uppercase tracking-wider text-[var(--ink-soft)] font-semibold border-b border-[var(--border)]">
               <div className="col-span-3">Name</div>
               <div className="col-span-1">Kind</div>
@@ -197,6 +198,7 @@ export default function Investments() {
               </div>
             ))}
             {holdings.length === 0 && <div className="p-6 text-[var(--ink-soft)]">No holdings yet. Add your first investment above.</div>}
+            </div>
           </div>
         </>
       )}
@@ -211,7 +213,8 @@ export default function Investments() {
             <button data-testid="sip-submit" className="pill-btn btn-primary md:col-span-1 flex items-center justify-center"><Plus size={16} /></button>
           </form>
 
-          <div className="card p-0 overflow-hidden" data-testid="sips-list">
+          <div className="card p-0 overflow-x-auto" data-testid="sips-list">
+            <div className="min-w-[700px]">
             <div className="grid grid-cols-12 gap-2 p-4 text-xs uppercase tracking-wider text-[var(--ink-soft)] font-semibold border-b border-[var(--border)]">
               <div className="col-span-4">SIP</div>
               <div className="col-span-2 text-right">Monthly</div>
@@ -237,6 +240,7 @@ export default function Investments() {
               </div>
             ))}
             {sips.length === 0 && <div className="p-6 text-[var(--ink-soft)]">No SIPs yet. Add one above to see projections.</div>}
+            </div>
           </div>
         </>
       )}

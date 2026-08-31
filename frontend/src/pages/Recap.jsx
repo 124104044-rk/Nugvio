@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { inr } from "@/lib/currency";
 import { toast } from "sonner";
 import { Copy, Flame, PiggyBank, Receipt, Target, HeartPulse, Wallet } from "lucide-react";
 
-const inr = (n) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 export default function Recap() {
   const [d, setD] = useState(null);
@@ -11,7 +11,7 @@ export default function Recap() {
 
   const share = async () => {
     const t = [
-      "My Week in Money — Nugvio",
+      "My Week in Money — NugVio",
       `Saved: ${inr(d.saved)}`,
       `Spent: ${inr(d.spent)} (${d.spend_delta <= 0 ? "" : "+"}${inr(d.spend_delta)} vs last week)`,
       d.budget_used_pct != null ? `Budget used: ${d.budget_used_pct}%` : null,

@@ -120,3 +120,42 @@ h1, h2, h3, h4, h5 {
 /* stagger */
 @keyframes slideUp { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform: translateY(0); } }
 .animate-slide { animation: slideUp 380ms ease both; }
+
+/* ---------- Dark theme ---------- */
+[data-theme="dark"] {
+  --bg: #0B1220;
+  --surface: #121C30;
+  --ink: #E6EDF7;
+  --ink-soft: #94A3B8;
+  --border: #24324A;
+}
+[data-theme="dark"] .input { background: #0B1220; }
+[data-theme="dark"] .input:focus { background: #0B1220; border-color: var(--blue); }
+[data-theme="dark"] .chip { background: #1A2438; }
+[data-theme="dark"] .nav-link:hover { background: #1A2438; }
+[data-theme="dark"] .nav-link.active { background: var(--blue); color: #fff; }
+[data-theme="dark"] .btn-ghost { color: var(--ink); }
+[data-theme="dark"] .btn-ghost:hover { background: #E6EDF7; color: #0F172A; }
+[data-theme="dark"] .nudge-orange { background: rgba(249,115,22,0.10); }
+[data-theme="dark"] .nudge-red    { background: rgba(244,63,94,0.10); }
+[data-theme="dark"] .nudge-green  { background: rgba(22,163,74,0.10); }
+[data-theme="dark"] .nudge-blue   { background: rgba(37,99,235,0.10); }
+[data-theme="dark"] .bg-white { background-color: var(--surface); }
+[data-theme="dark"] .bg-slate-50 { background-color: #0F1828; }
+[data-theme="dark"] .bg-slate-100 { background-color: #1E293B; }
+[data-theme="dark"] .hover\:bg-slate-50:hover { background-color: #16233B; }
+[data-theme="dark"] .hover\:bg-slate-100:hover { background-color: #1E293B; }
+[data-theme="dark"] .paper-grain {
+  background-image:
+    radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    radial-gradient(rgba(255,255,255,0.02) 1px, transparent 1px);
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #334155; }
+[data-theme="dark"] .gauge-ring { background: conic-gradient(var(--green) calc(var(--pct)*1%), #24324A 0); }
+
+/* ---------- Mobile polish ---------- */
+@media (max-width: 767px) {
+  h1.text-4xl { font-size: 1.75rem; line-height: 2.1rem; }
+  .pill-btn { padding: 10px 16px; }
+  .card { border-radius: 16px; }
+}

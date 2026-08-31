@@ -27,7 +27,7 @@ export default function AuthPage({ mode }) {
     try {
       if (isLogin) await login(email, password);
       else await register(name, email, password);
-      toast.success(isLogin ? "Welcome back" : "Welcome to Nugvio");
+      toast.success(isLogin ? "Welcome back" : "Welcome to NugVio");
       nav("/app");
     } catch (e2) {
       setErr(formatErr(e2.response?.data?.detail) || e2.message);
@@ -44,7 +44,7 @@ export default function AuthPage({ mode }) {
     <div className="min-h-screen grid md:grid-cols-2">
       <div className="hidden md:flex flex-col justify-between p-10 relative" style={{background:'#0F172A', color:'#fff'}}>
         <Link to="/" className="flex items-center gap-2" data-testid="auth-logo-link">
-          <img src={LOGO_URL} alt="Nugvio" className="h-11 w-auto"/>
+          <img src={LOGO_URL} alt="NugVio" className="h-11 w-auto"/>
         </Link>
         <div>
           <div className="font-hand text-3xl mb-3" style={{color:'#FDA4AF'}}>nudge the youth</div>
@@ -60,7 +60,7 @@ export default function AuthPage({ mode }) {
         <form onSubmit={submit} className="w-full max-w-sm card p-8" data-testid="auth-form">
           <div className="md:hidden flex justify-center mb-4"><img src={LOGO_URL} className="h-10 w-auto" alt=""/></div>
           <h1 className="text-3xl font-bold mb-1">{isLogin ? "Welcome back" : "Create your account"}</h1>
-          <p className="text-sm text-[var(--ink-soft)] mb-6">{isLogin ? "Log in to your Nugvio dashboard" : "Start nudging your money in 30 seconds"}</p>
+          <p className="text-sm text-[var(--ink-soft)] mb-6">{isLogin ? "Log in to your NugVio dashboard" : "Start nudging your money in 30 seconds"}</p>
 
           {!isLogin && (
             <div className="mb-3">
@@ -102,7 +102,7 @@ export default function AuthPage({ mode }) {
 
           <div className="text-sm text-[var(--ink-soft)] mt-6 text-center">
             {isLogin ? (
-              <>New to Nugvio? <Link to="/signup" className="font-semibold text-[var(--blue)]" data-testid="switch-signup">Create account</Link></>
+              <>New to NugVio? <Link to="/signup" className="font-semibold text-[var(--blue)]" data-testid="switch-signup">Create account</Link></>
             ) : (
               <>Already have an account? <Link to="/login" className="font-semibold text-[var(--blue)]" data-testid="switch-login">Log in</Link></>
             )}

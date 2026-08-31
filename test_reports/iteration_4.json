@@ -1,0 +1,31 @@
+{
+  "summary": "Full regression pass on NugVio polish (rename, transactions filters/edit/income, Settings, dark mode, mobile bottom nav + more sheet). Backend: 5/5 pytest tests pass in /app/backend/tests/test_regression_polish.py — expenses CRUD+PATCH, list filters (q/type/category/date_from/date_to), income exclusion from /api/budgets spent totals AND /api/health-score month_spend (added ₹99999 income → both unchanged), /api/me PATCH (name/currency/notif_prefs), and /api/alerts respects notif_prefs.spending_alerts (turning off suppresses level='spending' alerts, restoring re-enables). Previous suites (iteration_3 test_new_features.py 19/19, iteration_2 test_investments.py) remain passing. Frontend (desktop 1440x900): title = 'NugVio — Your AI Financial OS', no 'FinPilot' string in app view, login as demo@nugvio.in works via role='Log in' button, expenses add (expense+income), tx-search filters, filter-income/filter-expense/filter-clear work, edit-exp-{id} enters edit mode → amount 310→333 updates row, del-exp-{id} removes rows, nav-settings loads with readonly email, theme-dark applies data-theme='dark' on <html>, theme-light restores, toggle-risk_alerts persists via PATCH /api/me, sidebar navigation to budgets/goals/investments/debts renders without error pages. Frontend (mobile 390x844): mobile-header + bottom-nav visible, bottomnav-more opens more-sheet containing Settings and Sign out, tapping Settings in the sheet navigates to /app/settings. Test data cleaned up (TEST_UI_* rows deleted, notif_prefs restored). Only console noise is the previously-noted Emergent dev-instrumentation <span> injected into <option> hydration warning (not user code).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Goals SIP <select>", "issues": ["Same pre-existing dev-only hydration warning ('<span> cannot be a child of <option>') caused by Emergent dev-instrumentation attributes; not present in production build."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regression_polish.py",
+    "/app/test_reports/pytest/regression_polish.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now ~1868 lines — splitting into router modules (auth, expenses, budgets, investments, goals, wealth, insights, alerts, settings) is overdue for maintainability.",
+    "GET /api/expenses date_to uses 'date_to + \"\\uffff\"' as $lte upper bound (line 410). This works because dates are ISO strings but is fragile if a client sends a full ISO timestamp; consider explicitly treating as end-of-day.",
+    "PATCH /api/me returns the full user doc but does not validate currency against a whitelist — any string can be persisted; UI relies on symbol map defaulting to the raw code.",
+    "notif_prefs stored as a raw dict on the user with no schema — server could accept arbitrary keys. Not a security issue but tightens with a Pydantic sub-model.",
+    "Bottom nav uses 'bottomnav-*' testids while sidebar uses 'nav-*' — both point at the same routes. Documenting this in a testing README would prevent selector confusion in automated tests."
+  ],
+  "updated_files": ["/app/backend/tests/test_regression_polish.py"],
+  "success_rate": {"backend": "100% (5/5 new + 19/19 prior)", "frontend": "100% (desktop + mobile flows)"},
+  "test_credentials": "demo@nugvio.in / Nugvio@123",
+  "seed_data_creation": "All test-created rows/prefs cleaned up: expense/income TEST_UI_* deleted, name/currency/notif_prefs restored to originals after PATCH tests.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run backend regression: `REACT_APP_BACKEND_URL=<url> pytest backend/tests/test_regression_polish.py -n 0` (serial required — parallel runs cause a race between filter-test cleanup and income-exclusion baseline read on /api/budgets). Login button is NOT type=submit; use get_by_role('button', name='Log in'). Mobile bottom nav testids are bottomnav-home/actions/expenses/coach and bottomnav-more (opens more-sheet with more-nav-* items). Dark theme applied via data-theme='dark' on <html>. Currency change only swaps display symbol.",
+  "rca of the issue": "N/A — no product bugs found."
+}

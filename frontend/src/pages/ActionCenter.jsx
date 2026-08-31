@@ -9,7 +9,6 @@ const SEV = {
   low: { cls: "nudge-blue", icon: Info, color: "#2563EB", label: "Good to do" },
   win: { cls: "nudge-green", icon: PartyPopper, color: "#16A34A", label: "Win" },
 };
-const inr = (n) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 export default function ActionCenter() {
   const [data, setData] = useState(null);

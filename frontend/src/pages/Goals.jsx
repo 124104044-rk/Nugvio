@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { inr } from "@/lib/currency";
 import { toast } from "sonner";
 import { Plus, Trash2, Target, Zap } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
-const inr = (n) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 const STATUS = {
   ahead: { label: "Ahead of schedule", bg: "#DCFCE7", color: "#166534" },
   on_track: { label: "On track", bg: "#DBEAFE", color: "#1E40AF" },

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { inr } from "@/lib/currency";
 import { toast } from "sonner";
 import { ShieldCheck, ShieldAlert, Plus } from "lucide-react";
 
-const inr = (n) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 export default function Emergency() {
   const [months, setMonths] = useState(6);

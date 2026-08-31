@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { inr } from "@/lib/currency";
 import { toast } from "sonner";
 import { Plus, Trash2, Zap, PartyPopper } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 
-const inr = (n) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
 export default function Debts() {
   const [rows, setRows] = useState([]);

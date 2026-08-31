@@ -121,9 +121,19 @@ class ExpenseIn(BaseModel):
     amount: float = Field(gt=0)
     category: Optional[str] = None
     date: Optional[str] = None  # ISO date
+    type: Literal["expense", "income"] = "expense"
 
 class ExpenseUpdate(BaseModel):
+    description: Optional[str] = None
+    amount: Optional[float] = Field(default=None, gt=0)
     category: Optional[str] = None
+    date: Optional[str] = None
+    type: Optional[Literal["expense", "income"]] = None
+
+class MeUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    currency: Optional[Literal["INR", "USD", "EUR", "GBP"]] = None
+    notif_prefs: Optional[dict] = None
 
 class BudgetIn(BaseModel):
     category: str
@@ -297,6 +307,15 @@ async def google_session(body: GoogleSessionIn, response: Response):
 async def me(user: dict = Depends(get_current_user)):
     return user
 
+@api.patch("/me")
+async def update_me(body: MeUpdate, user: dict = Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "name" in updates:
+        updates["name"] = updates["name"].strip()
+    if updates:
+        await db.users.update_one({"id": user["id"]}, {"$set": updates})
+    return await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
+
 # ------------------ EXPENSES ------------------
 KEYWORD_MAP = {
     "Food": ["zomato", "swiggy", "restaurant", "cafe", "coffee", "food", "dominos", "pizza", "meal", "lunch", "dinner", "breakfast", "starbucks", "mcdonald", "kfc", "chai", "biryani"],
@@ -351,13 +370,17 @@ async def categorize(body: CategorizeIn, user: dict = Depends(get_current_user))
 
 @api.post("/expenses")
 async def add_expense(body: ExpenseIn, user: dict = Depends(get_current_user)):
-    cat = body.category or await ai_categorize(body.description)
+    if body.type == "income":
+        cat = body.category or "Income"
+    else:
+        cat = body.category or await ai_categorize(body.description)
     doc = {
         "id": new_id(),
         "user_id": user["id"],
         "description": body.description.strip(),
         "amount": float(body.amount),
         "category": cat,
+        "type": body.type,
         "date": body.date or now_iso(),
         "created_at": now_iso(),
     }
@@ -366,9 +389,41 @@ async def add_expense(body: ExpenseIn, user: dict = Depends(get_current_user)):
     return doc
 
 @api.get("/expenses")
-async def list_expenses(user: dict = Depends(get_current_user), limit: int = 200):
-    rows = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).sort("date", -1).to_list(limit)
+async def list_expenses(user: dict = Depends(get_current_user), limit: int = 200,
+                        q: Optional[str] = None, type: Optional[str] = None,
+                        category: Optional[str] = None,
+                        date_from: Optional[str] = None, date_to: Optional[str] = None):
+    query = {"user_id": user["id"]}
+    if q:
+        query["description"] = {"$regex": re.escape(q), "$options": "i"}
+    if type == "income":
+        query["type"] = "income"
+    elif type == "expense":
+        query["type"] = {"$ne": "income"}
+    if category:
+        query["category"] = category
+    if date_from or date_to:
+        dr = {}
+        if date_from:
+            dr["$gte"] = date_from
+        if date_to:
+            dr["$lte"] = date_to + "\uffff"
+        query["date"] = dr
+    rows = await db.expenses.find(query, {"_id": 0}).sort("date", -1).to_list(limit)
     return rows
+
+@api.patch("/expenses/{eid}")
+async def update_expense(eid: str, body: ExpenseUpdate, user: dict = Depends(get_current_user)):
+    e = await db.expenses.find_one({"id": eid, "user_id": user["id"]})
+    if not e:
+        raise HTTPException(404, "Transaction not found")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "description" in updates:
+        updates["description"] = updates["description"].strip()
+    if updates:
+        await db.expenses.update_one({"id": eid}, {"$set": updates})
+    doc = await db.expenses.find_one({"id": eid}, {"_id": 0})
+    return doc
 
 @api.delete("/expenses/{eid}")
 async def del_expense(eid: str, user: dict = Depends(get_current_user)):
@@ -381,7 +436,7 @@ async def list_budgets(user: dict = Depends(get_current_user)):
     rows = await db.budgets.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
     # compute spend for current month
     ym = now_utc().strftime("%Y-%m")
-    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    exps = await db.expenses.find({"user_id": user["id"], "type": {"$ne": "income"}}, {"_id": 0}).to_list(2000)
     spent_by = {}
     for e in exps:
         if str(e.get("date", ""))[:7] == ym:
@@ -580,7 +635,7 @@ SCORE_ACTIONS = {
 
 async def _health_data(user: dict):
     ym = now_utc().strftime("%Y-%m")
-    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    exps = await db.expenses.find({"user_id": user["id"], "type": {"$ne": "income"}}, {"_id": 0}).to_list(2000)
     goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
     debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
     budgets = await db.budgets.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
@@ -647,7 +702,7 @@ async def health_breakdown(user: dict = Depends(get_current_user)):
 @api.get("/nudges")
 async def nudges(user: dict = Depends(get_current_user)):
     ym = now_utc().strftime("%Y-%m")
-    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    exps = await db.expenses.find({"user_id": user["id"], "type": {"$ne": "income"}}, {"_id": 0}).to_list(2000)
     budgets = await db.budgets.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
     goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
     debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
@@ -713,7 +768,7 @@ async def budget_alerts(user: dict = Depends(get_current_user)):
     """Detailed per-category alerts based on current-month spend vs limits."""
     ym = now_utc().strftime("%Y-%m")
     budgets = await db.budgets.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
-    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    exps = await db.expenses.find({"user_id": user["id"], "type": {"$ne": "income"}}, {"_id": 0}).to_list(2000)
     alerts = []
     for b in budgets:
         spent = sum(e["amount"] for e in exps if e.get("category") == b["category"] and str(e.get("date", ""))[:7] == ym)
@@ -988,7 +1043,7 @@ async def projection(user: dict = Depends(get_current_user), years: int = 10):
 # ------------------ CASHFLOW PREDICT ------------------
 @api.get("/cashflow/predict")
 async def cashflow_predict(user: dict = Depends(get_current_user)):
-    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    exps = await db.expenses.find({"user_id": user["id"], "type": {"$ne": "income"}}, {"_id": 0}).to_list(2000)
     # avg daily spend last 30 days
     cutoff = now_utc() - timedelta(days=30)
     recent = [e for e in exps if _parse_dt(e["date"]) >= cutoff] if exps else []
@@ -1323,7 +1378,7 @@ async def set_goal_autopilot(gid: str, body: GoalAutopilotIn, user: dict = Depen
 ESSENTIAL_CATS = {"Rent", "Bills", "Food", "Healthcare"}
 
 async def _emergency_stats(user: dict, months: int = 6):
-    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    exps = await db.expenses.find({"user_id": user["id"], "type": {"$ne": "income"}}, {"_id": 0}).to_list(2000)
     cutoff = now_utc() - timedelta(days=90)
     ess = [e for e in exps if e.get("category") in ESSENTIAL_CATS and _parse_dt(e.get("date")) >= cutoff]
     monthly_essentials = sum(e["amount"] for e in ess) / 3 if ess else 0
@@ -1429,6 +1484,9 @@ async def smart_alerts(user: dict = Depends(get_current_user)):
     if saved_week > 0:
         alerts.append({"id": "goal-week-save", "level": "goal", "title": "Great saving week",
                        "message": f"You put ₹{int(saved_week)} toward your goals in the last 7 days.", "route": "/app/recap"})
+    prefs = user.get("notif_prefs") or {}
+    allow = {"risk": prefs.get("risk_alerts", True), "spending": prefs.get("spending_alerts", True), "goal": prefs.get("goal_alerts", True)}
+    alerts = [a for a in alerts if allow.get(a["level"], True)]
     order = {"risk": 0, "spending": 1, "goal": 2}
     alerts.sort(key=lambda a: order.get(a["level"], 3))
     return {"alerts": alerts, "count": len(alerts), "critical": sum(1 for a in alerts if a["level"] == "risk")}
@@ -1439,7 +1497,7 @@ async def action_center(user: dict = Depends(get_current_user)):
     now = now_utc()
     ym = now.strftime("%Y-%m")
     last_ym = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
-    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    exps = await db.expenses.find({"user_id": user["id"], "type": {"$ne": "income"}}, {"_id": 0}).to_list(2000)
     budgets = await db.budgets.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
     goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
     debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
@@ -1536,7 +1594,7 @@ async def weekly_recap(user: dict = Depends(get_current_user)):
     now = now_utc()
     wk = now - timedelta(days=7)
     prev_wk = now - timedelta(days=14)
-    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    exps = await db.expenses.find({"user_id": user["id"], "type": {"$ne": "income"}}, {"_id": 0}).to_list(2000)
     week_exps = [e for e in exps if _parse_dt(e.get("date")) >= wk]
     prev_exps = [e for e in exps if prev_wk <= _parse_dt(e.get("date")) < wk]
     spent_week = sum(e["amount"] for e in week_exps)

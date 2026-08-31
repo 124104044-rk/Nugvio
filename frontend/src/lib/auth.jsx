@@ -8,6 +8,7 @@ export function AuthProvider({ children }) {
   const load = useCallback(async () => {
     try {
       const { data } = await api.get("/auth/me");
+      if (data.currency) localStorage.setItem("nugvio_currency", data.currency);
       setUser(data);
     } catch {
       setUser(false);

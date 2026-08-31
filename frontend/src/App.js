@@ -1,6 +1,7 @@
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { ThemeProvider } from "@/lib/theme";
 import { Toaster } from "sonner";
 import AuthCallback from "@/components/AuthCallback";
 
@@ -23,6 +24,7 @@ import ActionCenter from "@/pages/ActionCenter";
 import NetWorth from "@/pages/NetWorth";
 import Emergency from "@/pages/Emergency";
 import Recap from "@/pages/Recap";
+import SettingsPage from "@/pages/Settings";
 
 function Protected({ children }) {
   const { user } = useAuth();
@@ -56,6 +58,7 @@ function AppRoutes() {
             <Route path="/app/networth" element={<Protected><NetWorth /></Protected>} />
             <Route path="/app/emergency" element={<Protected><Emergency /></Protected>} />
             <Route path="/app/recap" element={<Protected><Recap /></Protected>} />
+            <Route path="/app/settings" element={<Protected><SettingsPage /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
@@ -64,12 +67,14 @@ function AppRoutes() {
 function App() {
   return (
     <div className="App">
+      <ThemeProvider>
       <AuthProvider>
         <Toaster position="top-right" richColors />
         <BrowserRouter>
           <AppRoutes />
         </BrowserRouter>
       </AuthProvider>
+      </ThemeProvider>
     </div>
   );
 }

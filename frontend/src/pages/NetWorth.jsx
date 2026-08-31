@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { inr } from "@/lib/currency";
 import { toast } from "sonner";
 import { Plus, Trash2, Landmark, TrendingDown } from "lucide-react";
 
 const KINDS = ["Bank", "Savings", "Cash", "Other"];
-const inr = (n) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 export default function NetWorth() {
   const [d, setD] = useState(null);
