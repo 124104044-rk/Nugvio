@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { LOGO_URL } from "@/lib/api";
 import BudgetAlertsBell from "@/components/BudgetAlertsBell";
-import { LayoutDashboard, Receipt, PiggyBank, Target, MessageCircle, TrendingDown, GraduationCap, Calculator, LineChart, Gift, LogOut, Repeat } from "lucide-react";
+import { LayoutDashboard, Receipt, PiggyBank, Target, MessageCircle, TrendingDown, GraduationCap, Calculator, LineChart, Gift, LogOut, Repeat, TrendingUp } from "lucide-react";
 
 const items = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, end: true, tid: "nav-dashboard" },
@@ -10,6 +10,7 @@ const items = [
   { to: "/app/recurring", label: "Recurring", icon: Repeat, tid: "nav-recurring" },
   { to: "/app/budgets", label: "Budgets", icon: PiggyBank, tid: "nav-budgets" },
   { to: "/app/goals", label: "Goals", icon: Target, tid: "nav-goals" },
+  { to: "/app/investments", label: "Investments", icon: TrendingUp, tid: "nav-investments" },
   { to: "/app/coach", label: "AI Coach", icon: MessageCircle, tid: "nav-coach" },
   { to: "/app/debts", label: "Debts", icon: TrendingDown, tid: "nav-debts" },
   { to: "/app/learn", label: "Learn", icon: GraduationCap, tid: "nav-learn" },

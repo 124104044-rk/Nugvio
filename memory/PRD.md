@@ -38,13 +38,15 @@ Secondary: young families, self-employed, small business owners.
 ## Implementation Log
 - 2026-01: MVP built end-to-end — auth, all 10 feature areas, seeded demo data, live LLM coach
 - 2026-01: Added Budget Alerts (dedicated endpoint + top-right bell + inline banner on Budgets) and Recurring Transactions tracker (CRUD, pause/resume, post-now, run-all-due, 5 seeded samples)
+- 2026-06: Investment Dashboard shipped — portfolio holdings tracker (MF/Stock/Gold/FD/Bond/Crypto, CRUD + price update), SIP tracker (CRUD, pause/resume), summary stats (invested/current/gain/monthly SIP), allocation breakdown with best/worst performers, 10-year compounding SIP projection chart, seeded demo data. E2E tested 100% (iteration_2.json)
 
 ## Backlog / Roadmap
-- P1: CSV/statement upload with AI parse; Investment Dashboard; Retirement Planner; Family Dashboard
+- P1: CSV/statement upload with AI parse; Retirement Planner; Family Dashboard
 - P2: Bank/UPI integration via Account Aggregator framework; Merchant partnerships for NugPoints
 - P3: Co-branded FinPilot/Nugvio card (partner bank); Behavioural analytics
 - P4: Streaming AI Coach via SSE (currently non-streaming); Push notifications for nudges
 
 ## Next Action Items
-- Run testing_agent_v3 for backend + frontend flows
+- NugPoints redemption store polish (P1)
+- AI Cash Flow prediction improvements (P1)
 - Add unit tests for tax calculator edge cases

@@ -154,6 +154,28 @@ class RecurringUpdate(BaseModel):
     amount: Optional[float] = None
     next_due: Optional[str] = None
 
+class HoldingIn(BaseModel):
+    name: str
+    kind: Literal["MF", "Stock", "Gold", "FD", "Bond", "Crypto"]
+    units: float = Field(gt=0)
+    avg_price: float = Field(gt=0)
+    current_price: float = Field(gt=0)
+
+class HoldingUpdate(BaseModel):
+    current_price: Optional[float] = None
+    units: Optional[float] = None
+
+class SIPIn(BaseModel):
+    name: str
+    monthly_amount: float = Field(gt=0)
+    start_date: str  # YYYY-MM-DD
+    expected_return: float = Field(ge=0, le=40)  # percent
+
+class SIPUpdate(BaseModel):
+    monthly_amount: Optional[float] = None
+    expected_return: Optional[float] = None
+    active: Optional[bool] = None
+
 CATEGORIES = ["Food", "Travel", "Shopping", "Bills", "Healthcare", "Entertainment", "Rent", "Investments", "Other"]
 
 # ------------------ AUTH ------------------
@@ -672,6 +694,137 @@ async def run_due(user: dict = Depends(get_current_user)):
         await db.recurring.update_one({"id": r["id"]}, {"$set": {"next_due": current_due, "last_posted": now_iso()}})
     return {"posted": posted}
 
+# ------------------ INVESTMENTS ------------------
+@api.get("/investments/summary")
+async def invest_summary(user: dict = Depends(get_current_user)):
+    holdings = await db.holdings.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    sips = await db.sips.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    invested = sum(h["units"] * h["avg_price"] for h in holdings)
+    current = sum(h["units"] * h["current_price"] for h in holdings)
+    gain = current - invested
+    gain_pct = (gain / invested * 100) if invested else 0
+    monthly_sip = sum(s["monthly_amount"] for s in sips if s.get("active", True))
+    # Allocation by kind
+    alloc = {}
+    for h in holdings:
+        v = h["units"] * h["current_price"]
+        alloc[h["kind"]] = alloc.get(h["kind"], 0) + v
+    allocation = [{"kind": k, "value": round(v, 2), "pct": round((v/current*100) if current else 0, 1)} for k, v in alloc.items()]
+    # Best & worst performer
+    perf = []
+    for h in holdings:
+        inv = h["units"] * h["avg_price"]
+        cur = h["units"] * h["current_price"]
+        p = (cur - inv) / inv * 100 if inv else 0
+        perf.append({"name": h["name"], "pct": round(p, 2), "gain": round(cur - inv, 2)})
+    perf.sort(key=lambda x: x["pct"], reverse=True)
+    best = perf[0] if perf else None
+    worst = perf[-1] if perf and len(perf) > 1 else None
+    return {
+        "invested": round(invested, 2),
+        "current_value": round(current, 2),
+        "gain": round(gain, 2),
+        "gain_pct": round(gain_pct, 2),
+        "monthly_sip": round(monthly_sip, 2),
+        "allocation": allocation,
+        "best": best,
+        "worst": worst,
+        "holdings_count": len(holdings),
+        "sips_count": sum(1 for s in sips if s.get("active", True)),
+    }
+
+@api.get("/investments/holdings")
+async def list_holdings(user: dict = Depends(get_current_user)):
+    rows = await db.holdings.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    for h in rows:
+        h["invested"] = round(h["units"] * h["avg_price"], 2)
+        h["current"] = round(h["units"] * h["current_price"], 2)
+        h["gain"] = round(h["current"] - h["invested"], 2)
+        h["gain_pct"] = round((h["gain"] / h["invested"] * 100) if h["invested"] else 0, 2)
+    return rows
+
+@api.post("/investments/holdings")
+async def add_holding(body: HoldingIn, user: dict = Depends(get_current_user)):
+    doc = {"id": new_id(), "user_id": user["id"], **body.model_dump(), "created_at": now_iso()}
+    await db.holdings.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.patch("/investments/holdings/{hid}")
+async def update_holding(hid: str, body: HoldingUpdate, user: dict = Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await db.holdings.update_one({"id": hid, "user_id": user["id"]}, {"$set": updates})
+    return {"ok": True}
+
+@api.delete("/investments/holdings/{hid}")
+async def del_holding(hid: str, user: dict = Depends(get_current_user)):
+    await db.holdings.delete_one({"id": hid, "user_id": user["id"]})
+    return {"ok": True}
+
+@api.get("/investments/sips")
+async def list_sips(user: dict = Depends(get_current_user)):
+    rows = await db.sips.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    today = now_utc().date()
+    for s in rows:
+        try:
+            start = datetime.fromisoformat(s["start_date"]).date() if "T" not in s["start_date"] else datetime.fromisoformat(s["start_date"]).date()
+        except Exception:
+            start = today
+        months_run = max(0, (today.year - start.year) * 12 + (today.month - start.month))
+        s["months_run"] = months_run
+        s["invested_so_far"] = round(months_run * s["monthly_amount"], 2)
+    return rows
+
+@api.post("/investments/sips")
+async def add_sip(body: SIPIn, user: dict = Depends(get_current_user)):
+    doc = {"id": new_id(), "user_id": user["id"], **body.model_dump(), "active": True, "created_at": now_iso()}
+    await db.sips.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.patch("/investments/sips/{sid}")
+async def update_sip(sid: str, body: SIPUpdate, user: dict = Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await db.sips.update_one({"id": sid, "user_id": user["id"]}, {"$set": updates})
+    return {"ok": True}
+
+@api.delete("/investments/sips/{sid}")
+async def del_sip(sid: str, user: dict = Depends(get_current_user)):
+    await db.sips.delete_one({"id": sid, "user_id": user["id"]})
+    return {"ok": True}
+
+@api.get("/investments/projection")
+async def projection(user: dict = Depends(get_current_user), years: int = 10):
+    """Monthly compounding projection of all active SIPs combined."""
+    sips = await db.sips.find({"user_id": user["id"], "active": True}, {"_id": 0}).to_list(50)
+    total_monthly = sum(s["monthly_amount"] for s in sips)
+    # weighted avg return
+    weighted = sum(s["monthly_amount"] * s["expected_return"] for s in sips)
+    avg_return = (weighted / total_monthly) if total_monthly else 12.0
+    r = avg_return / 100 / 12
+    series = []
+    invested = 0.0
+    value = 0.0
+    for m in range(1, years * 12 + 1):
+        invested += total_monthly
+        value = (value + total_monthly) * (1 + r)
+        if m % 12 == 0:
+            series.append({
+                "year": m // 12,
+                "invested": round(invested, 2),
+                "value": round(value, 2),
+                "gain": round(value - invested, 2),
+            })
+    return {
+        "monthly_sip": round(total_monthly, 2),
+        "avg_return_pct": round(avg_return, 2),
+        "series": series,
+        "final_value": round(value, 2),
+        "total_invested": round(invested, 2),
+    }
+
 # ------------------ CASHFLOW PREDICT ------------------
 @api.get("/cashflow/predict")
 async def cashflow_predict(user: dict = Depends(get_current_user)):
@@ -964,6 +1117,37 @@ async def seed_recurring_demo():
             "next_due": nd, "active": True, "created_at": now_iso()
         })
 
+async def seed_investments_demo():
+    admin_email = os.environ.get("ADMIN_EMAIL", "demo@nugvio.in")
+    u = await db.users.find_one({"email": admin_email})
+    if not u:
+        return
+    if await db.holdings.find_one({"user_id": u["id"]}):
+        return
+    holdings = [
+        ("Nippon India Small Cap", "MF", 120.5, 82.4, 118.6),
+        ("Parag Parikh Flexi Cap", "MF", 85.2, 55.1, 68.3),
+        ("HDFC Bank", "Stock", 30, 1420, 1685),
+        ("Tata Digital Gold", "Gold", 8.4, 5900, 7250),
+        ("SBI PPF", "FD", 1, 50000, 54000),
+    ]
+    for name, kind, units, avg, cur in holdings:
+        await db.holdings.insert_one({
+            "id": new_id(), "user_id": u["id"], "name": name, "kind": kind,
+            "units": units, "avg_price": avg, "current_price": cur, "created_at": now_iso()
+        })
+    sips = [
+        ("Nippon India Small Cap SIP", 2500, "2024-06-01", 15.0),
+        ("Parag Parikh Flexi Cap SIP", 3000, "2024-03-15", 13.0),
+        ("Nifty 50 Index SIP", 1500, "2025-01-10", 12.0),
+    ]
+    for name, amt, start, ret in sips:
+        await db.sips.insert_one({
+            "id": new_id(), "user_id": u["id"], "name": name,
+            "monthly_amount": amt, "start_date": start, "expected_return": ret,
+            "active": True, "created_at": now_iso()
+        })
+
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
@@ -975,6 +1159,7 @@ async def startup():
     await db.recurring.create_index("user_id")
     await seed_demo()
     await seed_recurring_demo()
+    await seed_investments_demo()
 
 @app.on_event("shutdown")
 async def shutdown():

@@ -17,6 +17,7 @@ import Learn from "@/pages/Learn";
 import Tax from "@/pages/Tax";
 import Cashflow from "@/pages/Cashflow";
 import Rewards from "@/pages/Rewards";
+import Investments from "@/pages/Investments";
 
 function Protected({ children }) {
   const { user } = useAuth();
@@ -46,6 +47,7 @@ function App() {
             <Route path="/app/tax" element={<Protected><Tax /></Protected>} />
             <Route path="/app/cashflow" element={<Protected><Cashflow /></Protected>} />
             <Route path="/app/rewards" element={<Protected><Rewards /></Protected>} />
+            <Route path="/app/investments" element={<Protected><Investments /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
