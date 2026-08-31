@@ -11,6 +11,7 @@ import uuid
 import logging
 import bcrypt
 import jwt as pyjwt
+import httpx
 from typing import List, Optional, Literal
 from datetime import datetime, timezone, timedelta
 
@@ -64,7 +65,26 @@ def make_token(user_id: str, email: str) -> str:
     }
     return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
+async def _session_user(token: str):
+    s = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not s:
+        return None
+    exp = s["expires_at"]
+    if isinstance(exp, str):
+        exp = datetime.fromisoformat(exp)
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp < now_utc():
+        await db.user_sessions.delete_one({"session_token": token})
+        return None
+    return await db.users.find_one({"id": s["user_id"]}, {"_id": 0, "password_hash": 0})
+
 async def get_current_user(request: Request) -> dict:
+    st = request.cookies.get("session_token")
+    if st:
+        u = await _session_user(st)
+        if u:
+            return u
     token = request.cookies.get("access_token")
     if not token:
         auth = request.headers.get("Authorization", "")
@@ -77,6 +97,9 @@ async def get_current_user(request: Request) -> dict:
     except pyjwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
     except pyjwt.InvalidTokenError:
+        u = await _session_user(token)
+        if u:
+            return u
         raise HTTPException(401, "Invalid token")
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
@@ -223,9 +246,52 @@ async def login(body: LoginIn, response: Response):
     return {"id": u["id"], "email": u["email"], "name": u["name"], "nug_points": u.get("nug_points", 0), "token": token}
 
 @api.post("/auth/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
+    st = request.cookies.get("session_token")
+    if st:
+        await db.user_sessions.delete_one({"session_token": st})
     response.delete_cookie("access_token", path="/")
+    response.delete_cookie("session_token", path="/", secure=True, samesite="none")
     return {"ok": True}
+
+class GoogleSessionIn(BaseModel):
+    session_id: str
+
+@api.post("/auth/google/session")
+async def google_session(body: GoogleSessionIn, response: Response):
+    # Exchange session_id with Emergent Auth (must happen server-side)
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+            headers={"X-Session-ID": body.session_id}, timeout=15.0)
+    if r.status_code != 200:
+        raise HTTPException(401, "Invalid or expired session")
+    data = r.json()
+    email = data["email"].lower().strip()
+    u = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
+    if not u:
+        u = {
+            "id": new_id(),
+            "email": email,
+            "name": data.get("name") or email.split("@")[0],
+            "picture": data.get("picture"),
+            "auth_provider": "google",
+            "nug_points": 100,
+            "streak_days": 1,
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(dict(u))
+    elif data.get("picture") and not u.get("picture"):
+        await db.users.update_one({"id": u["id"]}, {"$set": {"picture": data["picture"]}})
+    session_token = data["session_token"]
+    await db.user_sessions.insert_one({
+        "id": new_id(), "user_id": u["id"], "session_token": session_token,
+        "expires_at": (now_utc() + timedelta(days=7)).isoformat(), "created_at": now_iso(),
+    })
+    response.set_cookie("session_token", session_token, httponly=True, secure=True,
+                        samesite="none", max_age=7 * 24 * 3600, path="/")
+    u.pop("_id", None)
+    return u
 
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):

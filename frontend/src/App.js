@@ -1,7 +1,8 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { Toaster } from "sonner";
+import AuthCallback from "@/components/AuthCallback";
 
 import Landing from "@/pages/Landing";
 import AuthPage from "@/pages/Auth";
@@ -30,13 +31,12 @@ function Protected({ children }) {
   return <AppShell>{children}</AppShell>;
 }
 
-function App() {
+function AppRoutes() {
+  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+  const location = useLocation(); // read hash from here, not window.location.hash (not reactive)
+  if (location.hash?.includes("session_id=")) return <AuthCallback />;
   return (
-    <div className="App">
-      <AuthProvider>
-        <Toaster position="top-right" richColors />
-        <BrowserRouter>
-          <Routes>
+    <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<AuthPage mode="login" />} />
             <Route path="/signup" element={<AuthPage mode="signup" />} />
@@ -57,7 +57,17 @@ function App() {
             <Route path="/app/emergency" element={<Protected><Emergency /></Protected>} />
             <Route path="/app/recap" element={<Protected><Recap /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+    </Routes>
+  );
+}
+
+function App() {
+  return (
+    <div className="App">
+      <AuthProvider>
+        <Toaster position="top-right" richColors />
+        <BrowserRouter>
+          <AppRoutes />
         </BrowserRouter>
       </AuthProvider>
     </div>
