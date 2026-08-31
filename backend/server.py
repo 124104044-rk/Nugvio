@@ -1054,8 +1054,32 @@ COACH_SYSTEM = (
     "You are Nugvio Coach — a friendly, plain-spoken AI financial coach for young Indians (18-30). "
     "Rules: (1) Give clear, decisive answers in 2-4 short sentences. (2) Use ₹ and Indian context (SIP, PPF, NPS, HDFC, ICICI, Groww). "
     "(3) NEVER recommend specific stocks or crypto. (4) Nudge users toward saving, budgeting, investing in index funds/SIPs, killing high-APR debt. "
-    "(5) Tone: like a smart friend — warm, honest, occasionally cheeky. No jargon. No disclaimers unless asked."
+    "(5) Tone: like a smart friend — warm, honest, occasionally cheeky. No jargon. No disclaimers unless asked. "
+    "(6) You are given a LIVE FINANCIAL SNAPSHOT of this user. When their question touches money they actually have — spending, debts, goals, investments, emergency fund — ground your advice in those real numbers instead of generic advice."
 )
+
+async def _coach_context(user: dict) -> str:
+    hb = await health_breakdown(user=user)
+    ac = await action_center(user=user)
+    ef = await _emergency_stats(user)
+    nw = await networth(user=user)
+    inv = await invest_summary(user=user)
+    lines = [
+        f"Financial Health Score: {hb['overall']}/100 (next target {hb['target']}). Components: "
+        + ", ".join(f"{c['label']} {c['points']}/{c['max']}" for c in hb["components"]),
+    ]
+    t = hb["totals"]
+    lines.append(f"This month spend ₹{int(t['month_spend'])}, total goal savings ₹{int(t['total_saved'])}, total debt ₹{int(t['total_debt'])}.")
+    lines.append(f"Net worth ₹{int(nw['net_worth'])} (assets ₹{int(nw['assets']['total'])}, liabilities ₹{int(nw['liabilities']['total'])}).")
+    lines.append(f"Investments: current value ₹{int(inv['current_value'])} on ₹{int(inv['invested'])} invested, monthly SIP ₹{int(inv['monthly_sip'])} across {inv['sips_count']} active SIPs.")
+    lines.append(f"Emergency fund: ₹{int(ef['current'])} of recommended ₹{int(ef['recommended'])} ({ef['coverage_pct']}% covered).")
+    tops = [i for i in ac["insights"] if i["severity"] in ("high", "medium")][:4]
+    if tops:
+        lines.append("Top issues right now: " + " | ".join(f"[{i['severity']}] {i['title']} — {i['message']}" for i in tops))
+    wins = [i for i in ac["insights"] if i["severity"] == "win"][:2]
+    if wins:
+        lines.append("Recent wins: " + " | ".join(i["title"] for i in wins))
+    return "\n".join(lines)
 
 @api.post("/coach/chat")
 async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
@@ -1071,7 +1095,15 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
     ).sort("at", 1).to_list(20)
     # Compose message with brief history embedded (LlmChat sessions are per-request here)
     convo = "\n".join([f"{m['role'].upper()}: {m['text']}" for m in hist[-8:]])
-    prompt = f"Conversation so far:\n{convo}\n\nRespond to the latest USER message as Nugvio Coach."
+    ctx = ""
+    try:
+        ctx = await _coach_context(user)
+    except Exception as e:
+        logging.warning(f"Coach context failed: {e}")
+    prompt = (
+        (f"LIVE FINANCIAL SNAPSHOT of this user (real numbers — use them when relevant):\n{ctx}\n\n" if ctx else "")
+        + f"Conversation so far:\n{convo}\n\nRespond to the latest USER message as Nugvio Coach."
+    )
     reply = "I'm here — ask me anything about money."
     if EMERGENT_LLM_KEY:
         try:

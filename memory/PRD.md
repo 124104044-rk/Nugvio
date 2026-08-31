@@ -48,8 +48,10 @@ Secondary: young families, self-employed, small business owners.
   - Goal Autopilot — monthly commit + SIP linking per goal, ahead/on-track/behind status, projected delay
   - Weekly Money Recap (/app/recap) — saved/spent/budget %/goal progress/streak/health delta + copy-to-share; contributions now logged; health snapshots stored
   - Sidebar reorganized into Overview/Spend/Wealth/Grow sections
+- 2026-06: Coach Superpowers — AI Coach now receives a live financial snapshot (health breakdown, totals, net worth, investments, emergency fund, top Action Center insights) injected into every chat prompt; Coach page shows "Sees your live numbers" chip and dynamic suggestion chips built from the user's top insights. Verified multi-turn grounded replies with real numbers.
 
 ## Backlog / Roadmap
+- P1 (user-confirmed, later): Push Nudges — email/push reminders from Smart Alerts (retention; Phase 2)
 - P1: CSV/statement upload with AI parse; Retirement Planner; Family Dashboard
 - P2: Bank/UPI integration via Account Aggregator framework; Merchant partnerships for NugPoints
 - P3: Co-branded FinPilot/Nugvio card (partner bank); Behavioural analytics

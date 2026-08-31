@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { Send, Bot, User } from "lucide-react";
+import { Send, Bot, User, Sparkles } from "lucide-react";
 
 const SESSION_KEY = "nugvio_coach_session";
 
-const SUGGESTIONS = [
-  "What is a SIP?",
-  "Should I invest in stocks now?",
-  "How do I build an emergency fund on a ₹40k salary?",
-  "Old vs new tax regime for me?",
+const STATIC_SUGGESTIONS = [
+  "What's my biggest money problem right now?",
+  "How's my financial health looking?",
+  "What should I do first this month?",
 ];
 
 export default function Coach() {
@@ -21,6 +20,18 @@ export default function Coach() {
     return s;
   });
   const scrollRef = useRef(null);
+  const [suggestions, setSuggestions] = useState(STATIC_SUGGESTIONS);
+
+  useEffect(() => { (async () => {
+    try {
+      const { data } = await api.get("/action-center");
+      const dynamic = data.insights
+        .filter(i => i.severity === "high" || i.severity === "medium")
+        .slice(0, 3)
+        .map(i => `Help me with this: ${i.title}`);
+      if (dynamic.length) setSuggestions([...dynamic, ...STATIC_SUGGESTIONS.slice(0, 2)]);
+    } catch {}
+  })(); }, []);
 
   useEffect(() => { (async () => {
     const { data } = await api.get(`/coach/history?session_id=${sid}`);
@@ -50,6 +61,9 @@ export default function Coach() {
           <h1 className="text-4xl font-bold">AI Coach</h1>
           <p className="text-[var(--ink-soft)] mt-1">A smart friend, on tap. No jargon. No hype.</p>
         </div>
+        <div className="chip" data-testid="coach-context-chip" style={{ background: "#EFF6FF", borderColor: "#BFDBFE" }}>
+          <Sparkles size={13} color="#2563EB" /> <span className="font-semibold text-[var(--blue)]">Sees your live numbers</span>
+        </div>
       </div>
 
       <div ref={scrollRef} className="card flex-1 overflow-y-auto p-6 space-y-4" data-testid="coach-messages">
@@ -57,8 +71,9 @@ export default function Coach() {
           <div className="text-center text-[var(--ink-soft)] py-10">
             <Bot size={40} className="mx-auto mb-3" color="#2563EB"/>
             <div className="font-hand text-2xl" style={{color:'var(--coral)'}}>ask me anything about money</div>
+            <div className="text-xs text-[var(--ink-soft)] mt-1">I can see your budgets, debts, goals and investments — so I'll answer with your real numbers.</div>
             <div className="mt-6 flex flex-wrap gap-2 justify-center">
-              {SUGGESTIONS.map((s,i) => (
+              {suggestions.map((s,i) => (
                 <button key={i} onClick={()=>send(s)} className="pill-btn btn-ghost text-sm" data-testid={`coach-suggestion-${i}`}>{s}</button>
               ))}
             </div>
