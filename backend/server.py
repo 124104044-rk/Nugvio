@@ -403,16 +403,13 @@ async def del_debt(did: str, user: dict = Depends(get_current_user)):
     await db.debts.delete_one({"id": did, "user_id": user["id"]})
     return {"ok": True}
 
-@api.get("/debts/strategy")
-async def debt_strategy(user: dict = Depends(get_current_user), method: str = "avalanche", extra_payment: float = 0.0):
-    debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+def _simulate_debts(debts: list, method: str = "avalanche", extra_payment: float = 0.0):
+    debts = [d for d in debts if d["balance"] > 0]
     if not debts:
         return {"method": method, "months": 0, "total_interest": 0, "order": [], "schedule": []}
-    # Simulate month-by-month
     working = [dict(d) for d in debts]
     for d in working:
         d["balance"] = float(d["balance"])
-    # order by strategy
     if method == "snowball":
         working.sort(key=lambda x: x["balance"])
     else:
@@ -424,20 +421,17 @@ async def debt_strategy(user: dict = Depends(get_current_user), method: str = "a
     schedule = []
     while any(d["balance"] > 0 for d in working) and months < 600:
         months += 1
-        # accrue interest
         for d in working:
             if d["balance"] > 0:
                 interest = d["balance"] * (d["apr"] / 100 / 12)
                 d["balance"] += interest
                 total_interest += interest
-        # pay minimums
         remaining = monthly_pool
         for d in working:
             if d["balance"] > 0:
                 pay = min(d["min_payment"], d["balance"])
                 d["balance"] -= pay
                 remaining -= pay
-        # extra to focused debt (first non-zero by strategy order)
         for d in working:
             if d["balance"] > 0 and remaining > 0:
                 pay = min(remaining, d["balance"])
@@ -451,6 +445,43 @@ async def debt_strategy(user: dict = Depends(get_current_user), method: str = "a
         "total_interest": round(total_interest, 2),
         "order": [d["name"] for d in working],
         "schedule": schedule[:120],
+    }
+
+@api.get("/debts/strategy")
+async def debt_strategy(user: dict = Depends(get_current_user), method: str = "avalanche", extra_payment: float = 0.0):
+    debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    return _simulate_debts(debts, method, extra_payment)
+
+class DebtPayIn(BaseModel):
+    amount: float = Field(gt=0)
+
+@api.post("/debts/{did}/pay")
+async def pay_debt(did: str, body: DebtPayIn, user: dict = Depends(get_current_user)):
+    d = await db.debts.find_one({"id": did, "user_id": user["id"]}, {"_id": 0})
+    if not d:
+        raise HTTPException(404, "Debt not found")
+    if d["balance"] <= 0:
+        raise HTTPException(400, "This debt is already paid off")
+    debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    before = _simulate_debts(debts)
+    pay = round(min(body.amount, d["balance"]), 2)
+    new_bal = round(d["balance"] - pay, 2)
+    await db.debts.update_one({"id": did}, {"$set": {"balance": new_bal}})
+    after = _simulate_debts([{**x, "balance": new_bal if x["id"] == did else x["balance"]} for x in debts])
+    months_saved = max(0, before["months"] - after["months"])
+    interest_saved = max(0.0, round(before["total_interest"] - after["total_interest"], 2))
+    pts = int(pay // 100)
+    if pts > 0:
+        await db.users.update_one({"id": user["id"]}, {"$inc": {"nug_points": pts}})
+        await db.nug_events.insert_one({
+            "id": new_id(), "user_id": user["id"], "kind": "debt_payment",
+            "points": pts, "note": f"Paid ₹{int(pay)} extra on {d['name']}", "at": now_iso()})
+    await db.debt_payments.insert_one({
+        "id": new_id(), "user_id": user["id"], "debt_id": did, "debt_name": d["name"],
+        "amount": pay, "interest_saved": interest_saved, "months_saved": months_saved, "at": now_iso()})
+    return {
+        "paid": pay, "new_balance": new_bal, "paid_off": new_bal <= 0,
+        "months_saved": months_saved, "interest_saved": interest_saved, "earned_points": pts,
     }
 
 # ------------------ HEALTH SCORE ------------------

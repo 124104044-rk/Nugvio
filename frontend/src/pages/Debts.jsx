@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Zap, PartyPopper } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
+
+const inr = (n) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
 export default function Debts() {
   const [rows, setRows] = useState([]);
@@ -13,6 +15,8 @@ export default function Debts() {
   const [method, setMethod] = useState("avalanche");
   const [extra, setExtra] = useState(0);
   const [strategy, setStrategy] = useState(null);
+  const [payAmt, setPayAmt] = useState({});
+  const [impact, setImpact] = useState(null);
 
   const loadRows = async () => setRows((await api.get("/debts")).data);
   const loadStrategy = async () => {
@@ -32,6 +36,25 @@ export default function Debts() {
   };
   const del = async (id) => { await api.delete(`/debts/${id}`); loadRows(); };
 
+  const quickPay = async (d, amount) => {
+    const amt = parseFloat(amount);
+    if (!amt || amt <= 0) return;
+    try {
+      const { data } = await api.post(`/debts/${d.id}/pay`, { amount: amt });
+      setPayAmt({ ...payAmt, [d.id]: "" });
+      setImpact({ ...data, debt_name: d.name });
+      if (data.paid_off) {
+        toast.success(`🎉 '${d.name}' is fully paid off! +${data.earned_points} NugPoints`);
+      } else {
+        toast.success(`${inr(data.paid)} paid on ${d.name} — ${data.months_saved} mo & ${inr(data.interest_saved)} interest saved · +${data.earned_points} NugPoints`);
+      }
+      await loadRows();
+      loadStrategy();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Payment failed");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -47,16 +70,48 @@ export default function Debts() {
         <button data-testid="debt-submit" className="pill-btn btn-primary md:col-span-2 flex items-center justify-center gap-2"><Plus size={16}/> Add</button>
       </form>
 
+      {impact && (
+        <div className="card p-5 nudge-green animate-slide" data-testid="pay-impact-banner">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-full bg-white border border-[var(--border)]"><PartyPopper size={18} color="#16A34A"/></div>
+            <div className="flex-1">
+              <div className="font-semibold">
+                {impact.paid_off
+                  ? <>'{impact.debt_name}' fully paid off — incredible!</>
+                  : <>{inr(impact.paid)} paid on '{impact.debt_name}'</>}
+              </div>
+              <div className="text-sm text-[var(--ink-soft)]">
+                You just saved <b style={{color:'#16A34A'}}>{impact.months_saved} month{impact.months_saved===1?'':'s'}</b> and <b style={{color:'#16A34A'}}>{inr(impact.interest_saved)}</b> in future interest{impact.earned_points > 0 && <> · earned <b>+{impact.earned_points} NugPoints</b></>}.
+              </div>
+            </div>
+            <button onClick={()=>setImpact(null)} className="text-xs font-semibold text-[var(--ink-soft)] hover:underline" data-testid="pay-impact-dismiss">Dismiss</button>
+          </div>
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-5">
         <div className="card p-6" data-testid="debt-list">
           <div className="text-lg font-semibold mb-3">Your debts</div>
           {rows.map(d => (
-            <div key={d.id} className="py-3 border-b border-[var(--border)] flex items-center justify-between">
-              <div>
-                <div className="font-semibold">{d.name}</div>
-                <div className="text-xs text-[var(--ink-soft)]">₹{Math.round(d.balance).toLocaleString('en-IN')} · {d.apr}% APR · min ₹{d.min_payment}</div>
+            <div key={d.id} className="py-3 border-b border-[var(--border)]">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-semibold">{d.name} {d.balance <= 0 && <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{background:'#DCFCE7', color:'#166534'}}>Paid off</span>}</div>
+                  <div className="text-xs text-[var(--ink-soft)]">{inr(d.balance)} · {d.apr}% APR · min ₹{d.min_payment}</div>
+                </div>
+                <button onClick={()=>del(d.id)} data-testid={`debt-del-${d.id}`} className="p-2 rounded-full hover:bg-slate-100"><Trash2 size={16} color="#F43F5E"/></button>
               </div>
-              <button onClick={()=>del(d.id)} className="p-2 rounded-full hover:bg-slate-100"><Trash2 size={16} color="#F43F5E"/></button>
+              {d.balance > 0 && (
+                <div className="mt-2 flex items-center gap-1.5 flex-wrap" data-testid={`debt-quickpay-${d.id}`}>
+                  <Zap size={13} color="#F97316"/>
+                  {[500, 1000, 2000].map(a => (
+                    <button key={a} data-testid={`debt-quick-${a}-${d.id}`} onClick={()=>quickPay(d, a)} className="pill-btn btn-ghost text-xs px-3 py-1">+{inr(a)}</button>
+                  ))}
+                  <input data-testid={`debt-pay-input-${d.id}`} className="input text-xs w-24 py-1" type="number" placeholder="₹ custom"
+                    value={payAmt[d.id] || ""} onChange={e=>setPayAmt({...payAmt, [d.id]: e.target.value})}/>
+                  <button data-testid={`debt-pay-btn-${d.id}`} onClick={()=>quickPay(d, payAmt[d.id])} className="pill-btn btn-orange text-xs px-3 py-1">Pay</button>
+                </div>
+              )}
             </div>
           ))}
           {rows.length===0 && <div className="text-sm text-[var(--ink-soft)]">No debts. Cool.</div>}
