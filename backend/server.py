@@ -696,7 +696,23 @@ async def health_breakdown(user: dict = Depends(get_current_user)):
     for c in weakest:
         a = SCORE_ACTIONS[c["key"]]
         actions.append({**a, "component": c["label"], "potential_gain": c["max"] - c["points"]})
-    return {"overall": overall, "target": target, "components": comps, "actions": actions, "totals": d["totals"]}
+    today = now_utc().date().isoformat()
+    snaps = await db.health_snapshots.find({"user_id": user["id"]}, {"_id": 0}).sort("date", -1).to_list(60)
+    prev = next((s for s in snaps if s["date"] <= (now_utc() - timedelta(days=6)).date().isoformat()), None)
+    delta = (overall - prev["score"]) if prev else None
+    change_reason = None
+    if prev and prev.get("components"):
+        diffs = [(c["label"], c["points"] - prev["components"].get(c["key"], c["points"])) for c in comps]
+        diffs = [x for x in diffs if x[1] != 0]
+        if diffs:
+            top = max(diffs, key=lambda x: abs(x[1]))
+            change_reason = f"{top[0]} {'improved' if top[1] > 0 else 'dropped'} {'+' if top[1] > 0 else ''}{top[1]} pts"
+    await db.health_snapshots.update_one(
+        {"user_id": user["id"], "date": today},
+        {"$set": {"user_id": user["id"], "date": today, "score": overall,
+                  "components": {c["key"]: c["points"] for c in comps}}}, upsert=True)
+    return {"overall": overall, "target": target, "components": comps, "actions": actions,
+            "totals": d["totals"], "delta": delta, "change_reason": change_reason}
 
 # ------------------ NUDGES ------------------
 @api.get("/nudges")
@@ -1210,7 +1226,8 @@ COACH_SYSTEM = (
     "(6) You are given a LIVE FINANCIAL SNAPSHOT of this user. When their question touches money they actually have — spending, debts, goals, investments, emergency fund — ground your advice in those real numbers instead of generic advice. "
     "(7) After your reply, output ONE final line exactly in this format: ACTIONS: [{\"label\": \"...\", \"route\": \"...\"}] — 1 to 3 short tap-to-do buttons that let the user act on your advice inside the app. "
     "Allowed routes ONLY: /app/debts (debt payoff plan), /app/budgets, /app/goals, /app/investments (SIPs & portfolio), /app/emergency (emergency fund planner), /app/expenses, /app/networth, /app/learn (lessons), /app/tax, /app/recap. "
-    "Labels must be specific and include amounts when possible, e.g. \"Pay ₹2,000 extra on HDFC card\". If no action fits, output ACTIONS: []"
+    "Labels must be specific and include amounts when possible, e.g. \"Pay ₹2,000 extra on HDFC card\". If no action fits, output ACTIONS: [] "
+    "(8) For what-if questions (Can I afford X? What if I save ₹Y more monthly? Debt vs savings? How long to a goal?), do the actual arithmetic from the snapshot and show it simply — e.g. '₹60,000 is 2.1× your monthly surplus of ₹28,400, so...'. Give a clear verdict, never vague hedging."
 )
 
 COACH_ACTION_ROUTES = {"/app/debts", "/app/budgets", "/app/goals", "/app/investments", "/app/emergency",
@@ -1240,7 +1257,11 @@ async def _coach_context(user: dict) -> str:
         + ", ".join(f"{c['label']} {c['points']}/{c['max']}" for c in hb["components"]),
     ]
     t = hb["totals"]
-    lines.append(f"This month spend ₹{int(t['month_spend'])}, total goal savings ₹{int(t['total_saved'])}, total debt ₹{int(t['total_debt'])}.")
+    ym = now_utc().strftime("%Y-%m")
+    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    income_m = sum(e["amount"] for e in exps if e.get("type") == "income" and str(e.get("date", ""))[:7] == ym)
+    surplus = income_m - t["month_spend"]
+    lines.append(f"This month: income ₹{int(income_m)}, spend ₹{int(t['month_spend'])}, surplus ₹{int(surplus)}. Total goal savings ₹{int(t['total_saved'])}, total debt ₹{int(t['total_debt'])}.")
     lines.append(f"Net worth ₹{int(nw['net_worth'])} (assets ₹{int(nw['assets']['total'])}, liabilities ₹{int(nw['liabilities']['total'])}).")
     lines.append(f"Investments: current value ₹{int(inv['current_value'])} on ₹{int(inv['invested'])} invested, monthly SIP ₹{int(inv['monthly_sip'])} across {inv['sips_count']} active SIPs.")
     lines.append(f"Emergency fund: ₹{int(ef['current'])} of recommended ₹{int(ef['recommended'])} ({ef['coverage_pct']}% covered).")
@@ -1694,6 +1715,95 @@ async def checkin_status(user: dict = Depends(get_current_user)):
         "streak_days": streak,
         "streak_savers": user.get("streak_savers", 0),
         "next_milestone_in": (7 - (streak % 7)) if streak % 7 else 7,
+    }
+
+# ------------------ WHAT SHOULD I DO WITH MY MONEY (SIGNATURE) ------------------
+ALLOC_DISCLAIMER = "Educational guidance based on your own data — not registered investment advice. NugVio never moves money."
+
+@api.get("/allocate")
+async def allocate_money(user: dict = Depends(get_current_user), amount: Optional[float] = None):
+    now = now_utc()
+    ym = now.strftime("%Y-%m")
+    exps = await db.expenses.find({"user_id": user["id"]}, {"_id": 0}).to_list(2000)
+    income_m = sum(e["amount"] for e in exps if e.get("type") == "income" and str(e.get("date", ""))[:7] == ym)
+    spend_m = sum(e["amount"] for e in exps if e.get("type") != "income" and str(e.get("date", ""))[:7] == ym)
+    surplus = max(0.0, income_m - spend_m)
+    amt = float(amount) if amount and amount > 0 else (round(surplus) if surplus >= 1000 else 10000.0)
+
+    debts = await db.debts.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    goals = await db.goals.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    ef = await _emergency_stats(user)
+
+    weights, meta = {}, {}
+    high = [d for d in debts if d["balance"] > 0 and d.get("apr", 0) >= 15]
+    if high:
+        weights["debt"] = 35
+        meta["debt"] = max(high, key=lambda x: x["apr"])
+    if ef["gap"] > 0:
+        weights["emergency"] = 25 if ef["coverage_pct"] < 50 else 15
+    if goals:
+        paces = [(g, _goal_pace(g)) for g in goals]
+        behind = [gp for gp in paces if gp[1]["status"] == "behind"]
+        meta["goals"] = (behind or paces)[0]
+        weights["goals"] = 20 if behind else 12
+    weights["invest"] = 20
+    weights["flex"] = 10
+    total_w = sum(weights.values())
+
+    items = []
+    keys = list(weights)
+    allocated = 0.0
+    for i, k in enumerate(keys):
+        a = round(amt - allocated) if i == len(keys) - 1 else round(amt * weights[k] / total_w)
+        allocated += a
+        pct = round(a / amt * 100) if amt else 0
+        if k == "debt":
+            d = meta["debt"]
+            before = _simulate_debts(debts)
+            after = _simulate_debts([{**x, "balance": max(0, x["balance"] - a) if x["id"] == d["id"] else x["balance"]} for x in debts])
+            items.append({
+                "key": k, "label": f"Pay down {d['name']}", "amount": a, "pct": pct,
+                "reasoning": f"At {d['apr']}% APR this debt costs you ~₹{int(d['balance'] * d['apr'] / 1200)}/month in interest — clearing it is the highest guaranteed return you can get.",
+                "impact": f"Saves ~₹{int(max(0, before['total_interest'] - after['total_interest']))} in future interest and {max(0, before['months'] - after['months'])} month(s) of repayment.",
+                "route": "/app/debts", "action_label": "Pay it now",
+            })
+        elif k == "emergency":
+            new_cov = round(min(100, (ef["current"] + a) / ef["recommended"] * 100), 1) if ef["recommended"] else 100
+            items.append({
+                "key": k, "label": "Emergency fund", "amount": a, "pct": pct,
+                "reasoning": f"Your safety net covers {ef['coverage_pct']}% of the recommended ₹{int(ef['recommended'])} — a gap of ₹{int(ef['gap'])} leaves you exposed to surprises.",
+                "impact": f"Coverage grows {ef['coverage_pct']}% → {new_cov}%.",
+                "route": "/app/emergency", "action_label": "Top up fund",
+            })
+        elif k == "goals":
+            g, pace = meta["goals"]
+            months_cov = round(a / pace["required_monthly"], 1) if pace["required_monthly"] else 0
+            why = f"'{g['title']}' is behind schedule and needs ₹{int(pace['required_monthly'])}/month to hit its deadline." if pace["status"] == "behind" else f"'{g['title']}' needs ₹{int(pace['required_monthly'])}/month to stay on track."
+            items.append({
+                "key": k, "label": f"Goal: {g['title']}", "amount": a, "pct": pct,
+                "reasoning": why,
+                "impact": f"Covers {months_cov} month(s) of required saving for this goal.",
+                "route": "/app/goals", "action_label": "Contribute",
+            })
+        elif k == "invest":
+            fv = a * (1.12 ** 10)
+            items.append({
+                "key": k, "label": "Invest (SIP / index funds)", "amount": a, "pct": pct,
+                "reasoning": "Money invested early compounds — long-term index investing historically beats idle cash.",
+                "impact": f"Could grow to ~₹{int(fv)} in 10 years at 12% average return.",
+                "route": "/app/investments", "action_label": "Set up SIP",
+            })
+        else:
+            items.append({
+                "key": k, "label": "Flexible spending", "amount": a, "pct": pct,
+                "reasoning": "Plans fail when there's no room for fun. Guilt-free money keeps the rest of the plan sustainable.",
+                "impact": "Keeps your budget realistic — and your streak alive.",
+                "route": "/app/budgets", "action_label": "View budgets",
+            })
+    return {
+        "amount": round(amt, 2), "surplus": round(surplus, 2),
+        "income_month": round(income_m, 2), "spend_month": round(spend_m, 2),
+        "items": items, "disclaimer": ALLOC_DISCLAIMER,
     }
 
 # ------------------ SEED DEMO ------------------
