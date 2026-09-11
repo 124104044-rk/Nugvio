@@ -1314,7 +1314,7 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
                 ],
                 "generationConfig": {
                     "temperature": 0.7,
-                    "maxOutputTokens": 500
+                    "maxOutputTokens": 1000
                 }
             }
 
