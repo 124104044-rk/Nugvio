@@ -12,6 +12,7 @@ import logging
 import bcrypt
 import jwt as pyjwt
 import httpx
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 from typing import List, Optional, Literal
 from datetime import datetime, timezone, timedelta
 
@@ -1256,33 +1257,78 @@ async def _coach_context(user: dict) -> str:
 @api.post("/coach/chat")
 async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
     sid = f"{user['id']}::{body.session_id}"
-    # persist user msg
+
+    # Persist user message
     await db.coach_messages.insert_one({
-        "id": new_id(), "user_id": user["id"], "session_id": body.session_id,
-        "role": "user", "text": body.text, "at": now_iso()
+        "id": new_id(),
+        "user_id": user["id"],
+        "session_id": body.session_id,
+        "role": "user",
+        "text": body.text,
+        "at": now_iso()
     })
-    # Pull history for context (last 20)
+
+    # Pull history for context
     hist = await db.coach_messages.find(
-        {"user_id": user["id"], "session_id": body.session_id}, {"_id": 0}
+        {"user_id": user["id"], "session_id": body.session_id},
+        {"_id": 0}
     ).sort("at", 1).to_list(20)
-    # Compose message with brief history embedded (LlmChat sessions are per-request here)
-    convo = "\n".join([f"{m['role'].upper()}: {m['text']}" for m in hist[-8:]])
+
+    convo = "\n".join(
+        [f"{m['role'].upper()}: {m['text']}" for m in hist[-8:]]
+    )
+
     ctx = ""
     try:
         ctx = await _coach_context(user)
     except Exception as e:
         logging.warning(f"Coach context failed: {e}")
+
     prompt = (
-        (f"LIVE FINANCIAL SNAPSHOT of this user (real numbers — use them when relevant):\n{ctx}\n\n" if ctx else "")
-        + f"Conversation so far:\n{convo}\n\nRespond to the latest USER message as Nugvio Coach."
+        (
+            f"LIVE FINANCIAL SNAPSHOT of this user "
+            f"(real numbers — use them when relevant):\n{ctx}\n\n"
+            if ctx else ""
+        )
+        + f"Conversation so far:\n{convo}\n\n"
+        + "Respond to the latest USER message as Nugvio Coach."
     )
+
     reply = "I'm here — ask me anything about money."
     actions = []
-   
+
+    if EMERGENT_LLM_KEY:
+        try:
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=sid,
+                system_message=COACH_SYSTEM,
+            ).with_model("gemini", "gemini-3-flash-preview")
+
+            res = await chat.send_message(
+                UserMessage(text=prompt)
+            )
+
+            reply = res if isinstance(res, str) else str(res)
+            reply, actions = _parse_coach_actions(reply)
+
+        except Exception as e:
+            logging.warning(f"Coach LLM failed: {e}")
+            reply = (
+                "My brain is offline for a sec. Try again in a moment — "
+                "meanwhile, what specific money question is on your mind?"
+            )
+
     await db.coach_messages.insert_one({
-        "id": new_id(), "user_id": user["id"], "session_id": body.session_id,
-        "role": "coach", "text": reply, "actions": actions, "at": now_iso()
+        "id": new_id(),
+        "user_id": user["id"],
+        "session_id": body.session_id,
+        "role": "coach",
+        "text": reply,
+        "actions": actions,
+        "at": now_iso()
     })
+
     return {"reply": reply, "actions": actions}
 
 @api.get("/coach/history")
