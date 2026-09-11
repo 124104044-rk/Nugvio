@@ -22,7 +22,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
 # LLM
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+
 
 # ------------------ CONFIG ------------------
 JWT_SECRET = os.environ["JWT_SECRET"]
@@ -340,27 +340,7 @@ async def ai_categorize(desc: str) -> str:
     hit = rule_categorize(desc)
     if hit:
         return hit
-    if not EMERGENT_LLM_KEY:
-        return "Other"
-    try:
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"cat-{new_id()}",
-            system_message=(
-                "You classify Indian expense descriptions into ONE category from: "
-                + ", ".join(CATEGORIES)
-                + ". Return ONLY a JSON object like {\"category\":\"Food\"}. No prose."
-            ),
-        ).with_model("gemini", "gemini-3-flash-preview")
-        res = await chat.send_message(UserMessage(text=f"Expense: {desc}. Classify."))
-        text = res if isinstance(res, str) else str(res)
-        m = re.search(r'\{[^{}]*"category"\s*:\s*"([^"]+)"[^{}]*\}', text)
-        if m:
-            cat = m.group(1).strip().title()
-            if cat in CATEGORIES:
-                return cat
-    except Exception as e:
-        logging.warning(f"AI categorize failed: {e}")
+  
     return "Other"
 
 @api.post("/expenses/categorize")
@@ -1298,19 +1278,7 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
     )
     reply = "I'm here — ask me anything about money."
     actions = []
-    if EMERGENT_LLM_KEY:
-        try:
-            chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=sid,
-                system_message=COACH_SYSTEM,
-            ).with_model("gemini", "gemini-3-flash-preview")
-            res = await chat.send_message(UserMessage(text=prompt))
-            reply = res if isinstance(res, str) else str(res)
-            reply, actions = _parse_coach_actions(reply)
-        except Exception as e:
-            logging.warning(f"Coach LLM failed: {e}")
-            reply = "My brain is offline for a sec. Try again in a moment — meanwhile, what specific money question is on your mind?"
+   
     await db.coach_messages.insert_one({
         "id": new_id(), "user_id": user["id"], "session_id": body.session_id,
         "role": "coach", "text": reply, "actions": actions, "at": now_iso()
