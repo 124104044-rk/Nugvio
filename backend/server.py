@@ -12,7 +12,7 @@ import logging
 import bcrypt
 import jwt as pyjwt
 import httpx
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+
 from typing import List, Optional, Literal
 from datetime import datetime, timezone, timedelta
 
@@ -1258,7 +1258,7 @@ async def _coach_context(user: dict) -> str:
 async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
     sid = f"{user['id']}::{body.session_id}"
 
-    # Persist user message
+    # Save user message
     await db.coach_messages.insert_one({
         "id": new_id(),
         "user_id": user["id"],
@@ -1268,16 +1268,18 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
         "at": now_iso()
     })
 
-    # Pull history for context
+    # Load recent conversation
     hist = await db.coach_messages.find(
         {"user_id": user["id"], "session_id": body.session_id},
         {"_id": 0}
     ).sort("at", 1).to_list(20)
 
     convo = "\n".join(
-        [f"{m['role'].upper()}: {m['text']}" for m in hist[-8:]]
+        f"{m['role'].upper()}: {m['text']}"
+        for m in hist[-8:]
     )
 
+    # Build user's live financial context
     ctx = ""
     try:
         ctx = await _coach_context(user)
@@ -1286,37 +1288,68 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
 
     prompt = (
         (
-            f"LIVE FINANCIAL SNAPSHOT of this user "
-            f"(real numbers — use them when relevant):\n{ctx}\n\n"
+            f"LIVE FINANCIAL SNAPSHOT OF THIS USER:\n{ctx}\n\n"
             if ctx else ""
         )
-        + f"Conversation so far:\n{convo}\n\n"
+        + f"CONVERSATION:\n{convo}\n\n"
         + "Respond to the latest USER message as Nugvio Coach."
     )
 
     reply = "I'm here — ask me anything about money."
     actions = []
 
-    if EMERGENT_LLM_KEY:
-        try:
-            chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=sid,
-                system_message=COACH_SYSTEM,
-            ).with_model("gemini", "gemini-3-flash-preview")
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
 
-            res = await chat.send_message(
-                UserMessage(text=prompt)
+    if gemini_key:
+        try:
+            payload = {
+                "system_instruction": {
+                    "parts": [{"text": COACH_SYSTEM}]
+                },
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": 500
+                }
+            }
+
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/"
+                "models/gemini-2.5-flash:generateContent"
             )
 
-            reply = res if isinstance(res, str) else str(res)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "x-goog-api-key": gemini_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+
+            response.raise_for_status()
+            result = response.json()
+
+            reply = (
+                result.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+                .strip()
+            ) or reply
+
             reply, actions = _parse_coach_actions(reply)
 
         except Exception as e:
-            logging.warning(f"Coach LLM failed: {e}")
+            logging.exception(f"Coach Gemini failed: {e}")
             reply = (
-                "My brain is offline for a sec. Try again in a moment — "
-                "meanwhile, what specific money question is on your mind?"
+                "My brain is offline for a moment. Please try again in a bit."
             )
 
     await db.coach_messages.insert_one({
@@ -1330,7 +1363,6 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
     })
 
     return {"reply": reply, "actions": actions}
-
 @api.get("/coach/history")
 async def coach_history(session_id: str, user: dict = Depends(get_current_user)):
     msgs = await db.coach_messages.find(
