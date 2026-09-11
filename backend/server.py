@@ -1320,7 +1320,7 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
 
             url = (
                 "https://generativelanguage.googleapis.com/v1beta/"
-                "models/gemini-2.5-flash:generateContent"
+                "models/gemini-3.8-flash:generateContent"
             )
 
             async with httpx.AsyncClient(timeout=30.0) as client:
