@@ -27,8 +27,18 @@ import Recap from "@/pages/Recap";
 import SettingsPage from "@/pages/Settings";
 
 function Protected({ children }) {
-  const { user } = useAuth();
-  if (user === null) return <div className="p-10 text-[var(--ink-soft)]">Loading…</div>;
+  const { user, authError, refresh } = useAuth();
+  if (user === null && authError) {
+    return (
+      <div className="p-10 text-[var(--ink-soft)]" data-testid="auth-load-error" role="alert">
+        <p className="mb-4">{authError}</p>
+        <button type="button" className="pill-btn btn-primary" onClick={refresh} data-testid="auth-retry-btn">
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (user === null) return <div className="p-10 text-[var(--ink-soft)]" data-testid="auth-loading">Loading…</div>;
   if (user === false) return <Navigate to="/login" replace />;
   return <AppShell>{children}</AppShell>;
 }
