@@ -39,7 +39,8 @@ function Protected({ children }) {
     );
   }
   if (user === null) return <div className="p-10 text-[var(--ink-soft)]" data-testid="auth-loading">Loading…</div>;
-  if (user === false) return <Navigate to="/login" replace />;
+  // Logged-out / expired / signed-out users land on the home page, not the login form.
+  if (user === false) return <Navigate to="/" replace />;
   return <AppShell>{children}</AppShell>;
 }
 
