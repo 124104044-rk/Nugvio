@@ -1335,7 +1335,8 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
                 "models/gemini-3.8-flash:generateContent"
             )
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            # Gemini replies can take ~30s; 30s was cutting them off (httpx.ReadTimeout).
+            async with httpx.AsyncClient(timeout=90.0) as client:
                 response = await client.post(
                     url,
                     headers={

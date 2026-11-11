@@ -19,7 +19,7 @@ function Protected({ children }) {
   const { user, authError, refresh } = useAuth();
   if (user === null && authError) return <div><p>{authError}</p><button onClick={refresh}>Retry</button></div>;
   if (user === null) return <div>Loading…</div>;
-  if (user === false) return <Navigate to="/login" replace />;
+  if (user === false) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -37,7 +37,7 @@ async function renderApp() {
       <AuthProvider>
         <MemoryRouter initialEntries={["/app"]}>
           <Routes>
-            <Route path="/login" element={<div>LOGIN PAGE</div>} />
+            <Route path="/" element={<div>HOME PAGE</div>} />
             <Route path="/app" element={<Protected><div>DASHBOARD</div></Protected>} />
           </Routes>
         </MemoryRouter>
@@ -54,11 +54,11 @@ test("valid session loads the dashboard", async () => {
   expect(text()).toContain("DASHBOARD");
 });
 
-test("401 (missing/expired token) redirects to login and clears the stale token", async () => {
+test("401 (missing/expired token) redirects to home and clears the stale token", async () => {
   localStorage.setItem("nugvio_token", "stale");
   api.get.mockRejectedValueOnce(httpErr(401));
   await renderApp();
-  expect(text()).toContain("LOGIN PAGE");
+  expect(text()).toContain("HOME PAGE");
   expect(localStorage.getItem("nugvio_token")).toBeNull();
 });
 
@@ -89,10 +89,10 @@ test("/auth/me is called with a finite timeout", async () => {
   expect(api.get).toHaveBeenCalledWith("/auth/me", expect.objectContaining({ timeout: expect.any(Number) }));
 });
 
-test("401 during the session (unauthorized event) logs the user out to /login", async () => {
+test("401 during the session (unauthorized event) logs the user out to the home page", async () => {
   api.get.mockResolvedValueOnce({ data: { id: "1" } });
   await renderApp();
   expect(text()).toContain("DASHBOARD");
   await act(async () => { window.dispatchEvent(new Event("nugvio:unauthorized")); });
-  expect(text()).toContain("LOGIN PAGE");
+  expect(text()).toContain("HOME PAGE");
 });
