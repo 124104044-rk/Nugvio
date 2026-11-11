@@ -2026,7 +2026,8 @@ app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    # Strip whitespace so "a.com , b.com" in the env var still matches exactly.
+    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )

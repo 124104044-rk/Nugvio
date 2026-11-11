@@ -130,3 +130,12 @@ def test_cors_allows_credentials_for_explicit_origin(env):
     assert pre.status_code == 200
     assert pre.headers.get("access-control-allow-credentials") == "true"
 
+
+
+def test_cors_origins_with_stray_spaces_still_match():
+    # Regression: "https://nugvio-app.vercel.app   ,https://preview..." blocked the live site.
+    server = _load_server(ORIGIN + "   , https://preview.example.vercel.app ")
+    with TestClient(server.app) as c:
+        for origin in (ORIGIN, "https://preview.example.vercel.app"):
+            r = c.get("/api/", headers={"Origin": origin})
+            assert r.headers.get("access-control-allow-origin") == origin
