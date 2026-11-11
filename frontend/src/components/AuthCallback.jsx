@@ -22,6 +22,9 @@ export default function AuthCallback() {
         window.history.replaceState(null, "", window.location.pathname);
         nav("/app", { replace: true, state: { user: data } });
       } catch {
+        // AuthProvider skipped its /me check because of the session_id hash, so the
+        // auth state is still "checking" (null). Resolve it, or /app would spin forever.
+        setUser(false);
         window.history.replaceState(null, "", window.location.pathname);
         nav("/login", { replace: true });
       }

@@ -80,32 +80,44 @@ async def _session_user(token: str):
         return None
     return await db.users.find_one({"id": s["user_id"]}, {"_id": 0, "password_hash": 0})
 
+async def _user_from_token(token: str):
+    """Resolve a JWT (or an OAuth session token) to a user. Returns (user, error_detail)."""
+    try:
+        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+    except pyjwt.ExpiredSignatureError:
+        return None, "Token expired"
+    except pyjwt.InvalidTokenError:
+        u = await _session_user(token)
+        return (u, None) if u else (None, "Invalid token")
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    return (user, None) if user else (None, "User not found")
+
 async def get_current_user(request: Request) -> dict:
     st = request.cookies.get("session_token")
     if st:
         u = await _session_user(st)
         if u:
             return u
-    token = request.cookies.get("access_token")
-    if not token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            token = auth[7:]
-    if not token:
+    # Try every credential the client sent (cookie first, then Bearer header) so a
+    # stale/expired cookie can no longer mask a valid Authorization header.
+    candidates = []
+    cookie_tok = request.cookies.get("access_token")
+    if cookie_tok:
+        candidates.append(cookie_tok)
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        bearer = auth[7:].strip()
+        if bearer and bearer not in candidates:
+            candidates.append(bearer)
+    if not candidates:
         raise HTTPException(401, "Not authenticated")
-    try:
-        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
-    except pyjwt.ExpiredSignatureError:
-        raise HTTPException(401, "Token expired")
-    except pyjwt.InvalidTokenError:
-        u = await _session_user(token)
-        if u:
-            return u
-        raise HTTPException(401, "Invalid token")
-    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
-    if not user:
-        raise HTTPException(401, "User not found")
-    return user
+    detail = "Not authenticated"
+    for tok in candidates:
+        user, err = await _user_from_token(tok)
+        if user:
+            return user
+        detail = err or detail
+    raise HTTPException(401, detail)
 
 # ------------------ MODELS ------------------
 class RegisterIn(BaseModel):
@@ -2014,7 +2026,8 @@ app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    # Strip whitespace so "a.com , b.com" in the env var still matches exactly.
+    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
