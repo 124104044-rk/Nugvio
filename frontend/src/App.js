@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/lib/auth";
@@ -26,6 +27,23 @@ import Emergency from "@/pages/Emergency";
 import Recap from "@/pages/Recap";
 import SettingsPage from "@/pages/Settings";
 
+// Shown while the saved session is being checked. The free backend sleeps when idle and
+// can take up to a minute to wake, so explain the wait instead of a bare "Loading…".
+function StartupLoading() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), 4000);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-10 text-center text-[var(--ink-soft)]" data-testid="auth-loading" role="status">
+      <div className="h-8 w-8 rounded-full border-4 border-[var(--blue)] border-t-transparent animate-spin" aria-hidden="true" />
+      <p>{slow ? "Waking up the server…" : "Loading…"}</p>
+      {slow && <p className="text-sm max-w-sm">NugVio's server sleeps when it hasn't been used for a while. This can take up to a minute — your dashboard will open automatically.</p>}
+    </div>
+  );
+}
+
 function Protected({ children }) {
   const { user, authError, refresh } = useAuth();
   if (user === null && authError) {
@@ -38,7 +56,7 @@ function Protected({ children }) {
       </div>
     );
   }
-  if (user === null) return <div className="p-10 text-[var(--ink-soft)]" data-testid="auth-loading">Loading…</div>;
+  if (user === null) return <StartupLoading />;
   // Logged-out / expired / signed-out users land on the home page, not the login form.
   if (user === false) return <Navigate to="/" replace />;
   return <AppShell>{children}</AppShell>;

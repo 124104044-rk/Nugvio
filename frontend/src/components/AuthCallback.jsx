@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
+import { useAuth, SESSION_HINT_KEY } from "@/lib/auth";
 
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
 export default function AuthCallback() {
@@ -18,6 +18,7 @@ export default function AuthCallback() {
       const sessionId = params.get("session_id");
       try {
         const { data } = await api.post("/auth/google/session", { session_id: sessionId });
+        localStorage.setItem(SESSION_HINT_KEY, "1"); // cookie-only session: remember to check it on next startup
         setUser(data);
         window.history.replaceState(null, "", window.location.pathname);
         nav("/app", { replace: true, state: { user: data } });

@@ -7,6 +7,14 @@ const AuthCtx = createContext(null);
 // startup check can never hang forever.
 const ME_TIMEOUT_MS = 60000;
 
+// Non-sensitive flag: "this browser has signed in before". Google sign-in keeps its
+// session in a cookie (no token in localStorage), so the token alone can't tell us.
+export const SESSION_HINT_KEY = "nugvio_has_session";
+const mayHaveSession = () =>
+  !!localStorage.getItem(TOKEN_KEY) ||
+  !!localStorage.getItem(SESSION_HINT_KEY) ||
+  !!window.location.hash?.includes("session_id=");
+
 export function classifyAuthError(err) {
   const status = err?.response?.status;
   if (status === 401 || status === 403) return { kind: "unauthenticated" };
@@ -20,20 +28,29 @@ export function classifyAuthError(err) {
 }
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null); // null = checking, false = anon, obj = user
+  // null = checking, false = anon, obj = user.
+  // A browser with no sign of a session starts as anon straight away, so logged-out
+  // visitors never wait on a sleeping backend. The check still runs in the background.
+  const [user, setUser] = useState(() => (mayHaveSession() ? null : false));
   const [authError, setAuthError] = useState(null); // message when the check failed for non-auth reasons
 
-  const load = useCallback(async () => {
-    setAuthError(null);
+  const load = useCallback(async (opts) => {
+    const silent = opts?.silent === true; // background check: never block or show errors
+    if (!silent) setAuthError(null);
     try {
       const { data } = await api.get("/auth/me", { timeout: ME_TIMEOUT_MS });
       if (data.currency) localStorage.setItem("nugvio_currency", data.currency);
+      localStorage.setItem(SESSION_HINT_KEY, "1");
       setUser(data);
     } catch (err) {
+      // A background check started while logged out must never undo a login that
+      // completed while it was still in flight (slow, waking server).
+      if (silent) return;
       const r = classifyAuthError(err);
       if (r.kind === "unauthenticated") {
         // Missing / expired / invalid token -> clear it and go to login.
         localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(SESSION_HINT_KEY);
         setUser(false);
       } else {
         // Genuine network/server problem: don't pretend the user is logged out,
@@ -48,13 +65,13 @@ export function AuthProvider({ children }) {
     // CRITICAL: If returning from OAuth callback, skip the /me check.
     // AuthCallback will exchange the session_id and establish the session first.
     if (window.location.hash?.includes("session_id=")) return;
-    load();
+    load({ silent: !mayHaveSession() });
   }, [load]);
 
   // Any authenticated API call that comes back 401 (e.g. token expired mid-session)
   // ends the session cleanly instead of leaving the app half-loaded.
   useEffect(() => {
-    const onUnauthorized = () => { setAuthError(null); setUser(false); };
+    const onUnauthorized = () => { localStorage.removeItem(SESSION_HINT_KEY); setAuthError(null); setUser(false); };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
@@ -62,6 +79,7 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
     if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+    localStorage.setItem(SESSION_HINT_KEY, "1");
     setAuthError(null);
     setUser(data);
     return data;
@@ -69,6 +87,7 @@ export function AuthProvider({ children }) {
   const register = async (name, email, password) => {
     const { data } = await api.post("/auth/register", { name, email, password });
     if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+    localStorage.setItem(SESSION_HINT_KEY, "1");
     setAuthError(null);
     setUser(data);
     return data;
@@ -76,9 +95,10 @@ export function AuthProvider({ children }) {
   const logout = async () => {
     try { await api.post("/auth/logout"); } catch {}
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(SESSION_HINT_KEY);
     setUser(false);
   };
-  const refresh = load;
+  const refresh = useCallback(() => load(), [load]);
 
   return (
     <AuthCtx.Provider value={{ user, authError, login, register, logout, refresh, setUser }}>

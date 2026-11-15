@@ -49,6 +49,7 @@ const text = () => container.textContent;
 const httpErr = (status) => Object.assign(new Error("x"), { response: { status } });
 
 test("valid session loads the dashboard", async () => {
+  localStorage.setItem("nugvio_token", "tok");
   api.get.mockResolvedValueOnce({ data: { id: "1", name: "R", email: "r@x.in" } });
   await renderApp();
   expect(text()).toContain("DASHBOARD");
@@ -63,6 +64,7 @@ test("401 (missing/expired token) redirects to home and clears the stale token",
 });
 
 test("network error shows a message and Retry, and Retry recovers", async () => {
+  localStorage.setItem("nugvio_token", "tok");
   api.get.mockRejectedValueOnce(new Error("Network Error"));
   await renderApp();
   expect(text()).toContain("Couldn't reach the NugVio server");
@@ -73,6 +75,7 @@ test("network error shows a message and Retry, and Retry recovers", async () => 
 });
 
 test("5xx shows an error, not the login page", async () => {
+  localStorage.setItem("nugvio_token", "tok");
   api.get.mockRejectedValueOnce(httpErr(503));
   await renderApp();
   expect(text()).toContain("(503)");
@@ -84,15 +87,60 @@ test("timeout is classified as a retryable error", () => {
 });
 
 test("/auth/me is called with a finite timeout", async () => {
+  localStorage.setItem("nugvio_token", "tok");
   api.get.mockResolvedValueOnce({ data: { id: "1" } });
   await renderApp();
   expect(api.get).toHaveBeenCalledWith("/auth/me", expect.objectContaining({ timeout: expect.any(Number) }));
 });
 
 test("401 during the session (unauthorized event) logs the user out to the home page", async () => {
+  localStorage.setItem("nugvio_token", "tok");
   api.get.mockResolvedValueOnce({ data: { id: "1" } });
   await renderApp();
   expect(text()).toContain("DASHBOARD");
   await act(async () => { window.dispatchEvent(new Event("nugvio:unauthorized")); });
   expect(text()).toContain("HOME PAGE");
+});
+
+test("no saved session: home page shows instantly, without waiting for the server", async () => {
+  api.get.mockReturnValueOnce(new Promise(() => {})); // sleeping backend: never answers
+  await renderApp();
+  expect(text()).toContain("HOME PAGE");
+  expect(text()).not.toContain("Loading…");
+});
+
+test("no saved session: a failed background check shows no error", async () => {
+  api.get.mockRejectedValueOnce(new Error("Network Error"));
+  await renderApp();
+  expect(text()).toContain("HOME PAGE");
+});
+
+test("cookie-only session (Google sign-in hint) still waits and loads the dashboard", async () => {
+  localStorage.setItem("nugvio_has_session", "1");
+  api.get.mockResolvedValueOnce({ data: { id: "1", name: "G" } });
+  await renderApp();
+  expect(text()).toContain("DASHBOARD");
+});
+
+test("background 401 cannot undo a login made while it was in flight", async () => {
+  let rejectMe; api.get.mockReturnValueOnce(new Promise((_, rej) => { rejectMe = rej; }));
+  let auth; const Grab = () => { auth = useAuth(); return null; };
+  await act(async () => { root.render(<AuthProvider><Grab /></AuthProvider>); });
+  api.post.mockResolvedValueOnce({ data: { id: "1", token: "newtok" } });
+  await act(async () => { await auth.login("a@b.in", "pw"); });
+  await act(async () => { rejectMe(httpErr(401)); });
+  expect(auth.user).toEqual({ id: "1", token: "newtok" });
+  expect(localStorage.getItem("nugvio_token")).toBe("newtok");
+});
+
+test("logout clears the session hint", async () => {
+  localStorage.setItem("nugvio_token", "tok");
+  api.get.mockResolvedValueOnce({ data: { id: "1" } });
+  let auth; const Grab = () => { auth = useAuth(); return null; };
+  await act(async () => { root.render(<AuthProvider><Grab /></AuthProvider>); });
+  expect(localStorage.getItem("nugvio_has_session")).toBe("1");
+  api.post.mockResolvedValueOnce({});
+  await act(async () => { await auth.logout(); });
+  expect(localStorage.getItem("nugvio_has_session")).toBeNull();
+  expect(auth.user).toBe(false);
 });
