@@ -30,7 +30,13 @@ api.interceptors.response.use(
   (error) => {
     const status = error?.response?.status;
     const url = error?.config?.url || "";
-    if (status === 401 && !CREDENTIAL_ENDPOINTS.some((p) => url.includes(p))) {
+    // Ignore a 401 for a request that was sent with different credentials than the
+    // ones stored now (e.g. a logged-out startup check that returns after the user
+    // has just logged in on a slow, waking server). It says nothing about this session.
+    const current = localStorage.getItem(TOKEN_KEY);
+    const sent = String(error?.config?.headers?.Authorization || "");
+    const stale = !!current && sent !== `Bearer ${current}`;
+    if (status === 401 && !stale && !CREDENTIAL_ENDPOINTS.some((p) => url.includes(p))) {
       localStorage.removeItem(TOKEN_KEY);
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     }
