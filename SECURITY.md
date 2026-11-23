@@ -16,9 +16,51 @@ variable is `REACT_APP_BACKEND_URL`, which is public.
 | Password length for new accounts | 8–128 characters | `RegisterIn` |
 
 Only successful AI Coach replies count, so a Gemini outage doesn't use up a user's messages.
+Simultaneous Coach requests from one user can't exceed the allowance: each request first
+reserves a slot under a per-user lock (successful replies today + requests in flight), and
+releases it when it finishes, whether it succeeded, Gemini failed or an error occurred.
+
 The login lockout is per email *and* address, so nobody can lock a user (or the public demo
-account) out from another network. It is held in memory and resets when the server restarts.
-The client address is the last `X-Forwarded-For` entry, which Render adds itself.
+account) out from another network. The client address is the last `X-Forwarded-For` entry,
+which Render adds itself (earlier entries can be faked by the client).
+
+## In-memory state: limitations
+
+The failed-login counters and the in-flight Coach reservations are kept in the backend
+process's memory. The daily Coach count itself is read from MongoDB, so it survives restarts.
+
+**Current deployment (checked 23 Nov 2026): one process on one instance.**
+- Render service: Free plan. Free web services can't scale beyond a single instance.
+- Start command: `uvicorn server:app --host 0.0.0.0 --port $PORT` (no `--workers`).
+- Startup logs show a single `Started server process` and no `Started parent process`,
+  so uvicorn runs one worker.
+
+**What this means today**
+- Login counters reset whenever the server restarts: on each deploy, after a crash, and
+  when the free instance spins down after 15 idle minutes. An attacker gets at most a fresh
+  5 attempts per account and address per restart. Restarts take about a minute, so this
+  allows roughly 5 guesses a minute at best, which still blocks fast password guessing.
+- In-flight Coach reservations are lost on restart, which is harmless: the requests they
+  belonged to are also gone.
+
+**When this stops being safe**
+- Running more than one instance (a paid plan with scaling) or more than one uvicorn worker.
+  Each process keeps its own counters, so an attacker gets 5 attempts *per process*, and
+  simultaneous Coach requests landing on different processes could exceed the allowance by
+  up to one per extra process.
+- Watch out: uvicorn reads `WEB_CONCURRENCY` when `--workers` isn't given, and Render sets
+  `WEB_CONCURRENCY` by default on newer services based on the plan's CPUs. Upgrading the plan
+  could silently start several workers. Before upgrading, add `--workers 1` to the start
+  command, or move to the shared design below.
+
+**Planned replacement (no new service, uses the existing MongoDB)**
+- `login_failures` collection: one document per key (`acct:<email>|<ip>`, `ip:<ip>`), updated
+  with an atomic `find_one_and_update` (`$push` the timestamp, `upsert`), plus a TTL index so
+  entries expire after the 15-minute window.
+- `coach_usage` collection: one document per user per IST day. Reserve with an atomic
+  `find_one_and_update({user_id, day, reserved: {$lt: limit}}, {$inc: {reserved: 1}}, upsert)`;
+  release with `$inc: -1` on failure. A TTL index removes old days.
+- Both need new collections and indexes, so they belong in a later phase. Redis isn't needed.
 
 ## Frontend (frontend/vercel.json, frontend/craco.config.js)
 

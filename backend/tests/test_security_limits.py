@@ -191,3 +191,160 @@ def test_ist_day_start_is_midnight_in_india():
     start = datetime.fromisoformat(server.ist_day_start_iso()).astimezone(server.IST)
     assert (start.hour, start.minute, start.second) == (0, 0, 0)
     assert datetime.now(server.IST) - start < timedelta(days=1)
+
+
+# ---------- AI Coach concurrency (reservations) ----------
+import asyncio  # noqa: E402
+
+GEMINI_HOST = "generativelanguage.googleapis.com"
+
+
+class _FakeGeminiResponse:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"candidates": [{"content": {"parts": [{"text": "Here's a tip."}]}}]}
+
+
+def _patch_gemini(monkeypatch, *, delay=0.3, fail=False):
+    """Fake Gemini (slow, optionally failing) while leaving every other httpx call real."""
+    real_post = httpx.AsyncClient.post
+    calls = {"n": 0}
+
+    async def fake_post(self, url, *args, **kwargs):
+        if GEMINI_HOST in str(url):
+            calls["n"] += 1
+            await asyncio.sleep(delay)
+            if fail:
+                raise httpx.ReadTimeout("simulated Gemini outage")
+            return _FakeGeminiResponse()
+        return await real_post(self, url, *args, **kwargs)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-not-a-real-key")
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    return calls
+
+
+def _run(server, scenario):
+    """Run an async scenario against the app on ONE event loop (locks are loop-bound)."""
+    async def main():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            await ac.post("/api/auth/register", json={"name": "C", "email": "c@x.in", "password": PW})
+            ac.cookies.clear()
+            tok = (await ac.post("/api/auth/login", json={"email": "c@x.in", "password": PW})).json()["token"]
+            ac.cookies.clear()
+            h = {"Authorization": f"Bearer {tok}"}
+
+            async def ask(text="hi"):
+                return await ac.post("/api/coach/chat", json={"session_id": "s1", "text": text}, headers=h)
+            return await scenario(ask)
+    return asyncio.run(main())
+
+
+@pytest.fixture()
+def bare_server(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    server = _load_server(ORIGIN)
+    server._login_failures.clear()
+    return server
+
+
+def test_simultaneous_requests_cannot_exceed_the_daily_allowance(bare_server, monkeypatch):
+    calls = _patch_gemini(monkeypatch, delay=0.3)
+
+    async def scenario(ask):
+        return await asyncio.gather(*[ask(f"q{i}") for i in range(12)])
+    results = _run(bare_server, scenario)
+    ok = [r for r in results if r.status_code == 200]
+    limited = [r for r in results if r.status_code == 429]
+    assert len(ok) + len(limited) == 12
+    assert len(ok) <= bare_server.COACH_DAILY_LIMIT
+    assert calls["n"] == len(ok)  # blocked requests never reach Gemini
+
+    # nothing is left reserved once requests finish
+    assert bare_server._coach_inflight == {}
+
+
+def test_simultaneous_requests_near_the_limit_allow_exactly_the_remaining_slots(bare_server, monkeypatch):
+    _patch_gemini(monkeypatch, delay=0.3)
+
+    async def scenario(ask):
+        for i in range(bare_server.COACH_DAILY_LIMIT - 1):       # use 4 of 5
+            assert (await ask(f"seq{i}")).status_code == 200
+        burst = await asyncio.gather(*[ask(f"b{i}") for i in range(6)])
+        final = await ask("after burst")
+        return burst, final
+    burst, final = _run(bare_server, scenario)
+    assert sum(r.status_code == 200 for r in burst) == 1
+    assert sum(r.status_code == 429 for r in burst) == 5
+    assert final.status_code == 429
+    assert "today's 5 AI Coach messages" in final.json()["detail"]
+
+
+def test_waiting_request_gets_a_clear_message(bare_server, monkeypatch):
+    _patch_gemini(monkeypatch, delay=0.5)
+
+    async def scenario(ask):
+        for i in range(bare_server.COACH_DAILY_LIMIT - 1):
+            await ask(f"seq{i}")
+        first = asyncio.create_task(ask("slow one"))
+        await asyncio.sleep(0.1)
+        second = await ask("impatient")
+        return await first, second
+    first, second = _run(bare_server, scenario)
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "still being answered" in second.json()["detail"]
+
+
+def test_failed_gemini_request_releases_its_reservation(bare_server, monkeypatch):
+    async def scenario(ask):
+        for i in range(bare_server.COACH_DAILY_LIMIT - 1):
+            assert (await ask(f"seq{i}")).status_code == 200   # no key: default reply, counted
+        _patch_gemini(monkeypatch, delay=0.2, fail=True)
+        failed = await asyncio.gather(*[ask(f"f{i}") for i in range(3)])
+        reserved_after_failure = dict(bare_server._coach_inflight)
+        _patch_gemini(monkeypatch, delay=0.05, fail=False)
+        ok = await ask("retry after outage")
+        over = await ask("one too many")
+        return failed, reserved_after_failure, ok, over
+    failed, reserved_after_failure, ok, over = _run(bare_server, scenario)
+    # one failed attempt went to Gemini, the others waited; none used up the allowance
+    assert any(r.status_code == 200 and "offline" in r.json()["reply"] for r in failed)
+    assert reserved_after_failure == {}
+    assert ok.status_code == 200 and "offline" not in ok.json()["reply"]
+    assert over.status_code == 429
+
+
+def test_unexpected_error_releases_its_reservation(bare_server, monkeypatch):
+    async def boom(body, user):
+        raise RuntimeError("simulated crash")
+    monkeypatch.setattr(bare_server, "_coach_reply", boom)
+
+    async def scenario(ask):
+        try:
+            await ask("crash")
+        except RuntimeError:
+            pass
+        return dict(bare_server._coach_inflight)
+    assert _run(bare_server, scenario) == {}
+
+
+def test_different_users_do_not_block_each_other(bare_server, monkeypatch):
+    _patch_gemini(monkeypatch, delay=0.3)
+
+    async def main():
+        transport = httpx.ASGITransport(app=bare_server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            toks = []
+            for e in ("u1@x.in", "u2@x.in"):
+                await ac.post("/api/auth/register", json={"name": "U", "email": e, "password": PW})
+                ac.cookies.clear()
+                toks.append((await ac.post("/api/auth/login", json={"email": e, "password": PW})).json()["token"])
+                ac.cookies.clear()
+            reqs = [ac.post("/api/coach/chat", json={"session_id": "s", "text": "hi"},
+                            headers={"Authorization": f"Bearer {t}"}) for t in toks]
+            return await asyncio.gather(*reqs)
+    assert [r.status_code for r in asyncio.run(main())] == [200, 200]

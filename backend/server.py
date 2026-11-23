@@ -6,6 +6,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 import os
 import re
+import asyncio
 import json
 import uuid
 import logging
@@ -49,8 +50,13 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 # ------------------ SECURITY LIMITS ------------------
-# Login brute-force protection (in memory: resets when the server restarts; one
-# Render instance, so that is enough to stop password guessing).
+# Login brute-force protection. Counters live in this process's memory:
+# - they reset on every restart (deploys, crashes, and free-plan spin-down after
+#   15 idle minutes), which gives an attacker a fresh 5 attempts per restart;
+# - they are per process: correct today because the service runs ONE uvicorn
+#   process on ONE Render instance (Free plan can't scale). With more workers or
+#   instances each would keep its own counters. See SECURITY.md for the planned
+#   MongoDB-backed replacement.
 LOGIN_WINDOW_SEC = 15 * 60
 LOGIN_MAX_FAILS_PER_ACCOUNT_IP = 5   # same email from the same address
 LOGIN_MAX_FAILS_PER_IP = 50          # any emails from one address (password spraying)
@@ -106,6 +112,49 @@ IST = timezone(timedelta(hours=5, minutes=30))
 def ist_day_start_iso() -> str:
     start = now_utc().astimezone(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     return start.astimezone(timezone.utc).isoformat()
+
+# Concurrency-safe allowance. Counting saved replies alone lets simultaneous requests
+# from one user all pass the check before any reply is saved. So each request first
+# reserves a slot: under a per-user lock it counts today's successful replies plus
+# requests still in flight, and only then takes a slot. The slot is always released
+# when the request ends (success, Gemini failure or error). A successful reply is
+# saved before release, so the database count takes over from the reservation.
+# Held in memory: correct for the single Render process (see SECURITY.md).
+_coach_inflight: dict = {}   # (user_id, IST day) -> requests in progress
+_coach_locks: dict = {}      # user_id -> asyncio.Lock
+
+def coach_limit_for(user: dict) -> int:
+    demo_email = os.environ.get("ADMIN_EMAIL", "demo@nugvio.in").lower()
+    return COACH_DEMO_DAILY_LIMIT if (user.get("email") or "").lower() == demo_email else COACH_DAILY_LIMIT
+
+async def coach_reserve(user: dict) -> tuple:
+    uid = user["id"]
+    limit = coach_limit_for(user)
+    day = ist_day_start_iso()
+    key = (uid, day)
+    lock = _coach_locks.setdefault(uid, asyncio.Lock())
+    async with lock:
+        used = await db.coach_messages.count_documents({
+            "user_id": uid, "role": "coach",
+            "at": {"$gte": day},
+            "text": {"$ne": COACH_OFFLINE_REPLY},
+        })
+        if used >= limit:
+            raise HTTPException(429, f"You've used today's {limit} AI Coach messages. They reset at midnight (IST).")
+        if used + _coach_inflight.get(key, 0) >= limit:
+            raise HTTPException(429, "Your last AI Coach message is still being answered. Please wait for it to finish.")
+        _coach_inflight[key] = _coach_inflight.get(key, 0) + 1
+    return key
+
+def coach_release(key: tuple) -> None:
+    n = _coach_inflight.get(key, 0) - 1
+    if n > 0:
+        _coach_inflight[key] = n
+    else:
+        _coach_inflight.pop(key, None)
+        lock = _coach_locks.get(key[0])
+        if lock is not None and not lock.locked() and not any(k[0] == key[0] for k in _coach_inflight):
+            _coach_locks.pop(key[0], None)
 
 def hash_pw(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
@@ -1336,19 +1385,16 @@ async def _coach_context(user: dict) -> str:
 
 @api.post("/coach/chat")
 async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
-    sid = f"{user['id']}::{body.session_id}"
+    # Daily allowance: successful replies today (IST) + requests in flight. Gemini
+    # failures are saved with COACH_OFFLINE_REPLY and never count.
+    key = await coach_reserve(user)
+    try:
+        return await _coach_reply(body, user)
+    finally:
+        coach_release(key)
 
-    # Daily allowance: count today's (IST) successful coach replies, so a Gemini
-    # outage never uses up a user's messages.
-    demo_email = os.environ.get("ADMIN_EMAIL", "demo@nugvio.in").lower()
-    limit = COACH_DEMO_DAILY_LIMIT if (user.get("email") or "").lower() == demo_email else COACH_DAILY_LIMIT
-    used = await db.coach_messages.count_documents({
-        "user_id": user["id"], "role": "coach",
-        "at": {"$gte": ist_day_start_iso()},
-        "text": {"$ne": COACH_OFFLINE_REPLY},
-    })
-    if used >= limit:
-        raise HTTPException(429, f"You've used today's {limit} AI Coach messages. They reset at midnight (IST).")
+async def _coach_reply(body: CoachMsgIn, user: dict):
+    sid = f"{user['id']}::{body.session_id}"
 
     # Save user message
     await db.coach_messages.insert_one({
