@@ -37,9 +37,10 @@ process's memory. The daily Coach count itself is read from MongoDB, so it survi
 
 **What this means today**
 - Login counters reset whenever the server restarts: on each deploy, after a crash, and
-  when the free instance spins down after 15 idle minutes. An attacker gets at most a fresh
-  5 attempts per account and address per restart. Restarts take about a minute, so this
-  allows roughly 5 guesses a minute at best, which still blocks fast password guessing.
+  when the free instance spins down after 15 idle minutes. Each restart gives an attacker a
+  fresh 5 attempts per account and address. An attacker can't trigger restarts, though, and
+  their own requests keep the free instance awake, so in practice the reset only helps them
+  around deploys or crashes.
 - In-flight Coach reservations are lost on restart, which is harmless: the requests they
   belonged to are also gone.
 
