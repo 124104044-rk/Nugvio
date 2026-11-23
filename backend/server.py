@@ -6,6 +6,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 import os
 import re
+import asyncio
 import json
 import uuid
 import logging
@@ -47,6 +48,134 @@ def now_iso() -> str:
 
 def new_id() -> str:
     return str(uuid.uuid4())
+
+# ------------------ SECURITY LIMITS ------------------
+# Login brute-force protection. Counters live in this process's memory:
+# - they reset on every restart (deploys, crashes, and free-plan spin-down after
+#   15 idle minutes), which gives an attacker a fresh 5 attempts per restart;
+# - they are per process: correct today because the service runs ONE uvicorn
+#   process on ONE Render instance (Free plan can't scale). With more workers or
+#   instances each would keep its own counters. See SECURITY.md for the planned
+#   MongoDB-backed replacement.
+LOGIN_WINDOW_SEC = 15 * 60
+LOGIN_MAX_FAILS_PER_ACCOUNT_IP = 5   # same email from the same address
+LOGIN_MAX_FAILS_PER_IP = 50          # any emails from one address (password spraying)
+_login_failures: dict = {}           # key -> list of failure timestamps
+
+def client_ip(request: Request) -> str:
+    # Render appends the connecting address to X-Forwarded-For and keeps whatever the
+    # client sent, so only the LAST entry is trustworthy.
+    xff = request.headers.get("x-forwarded-for", "")
+    parts = [p.strip() for p in xff.split(",") if p.strip()]
+    if parts:
+        return parts[-1]
+    return request.client.host if request.client else "unknown"
+
+def _recent_failures(key: str, now: float) -> list:
+    hits = [t for t in _login_failures.get(key, []) if now - t < LOGIN_WINDOW_SEC]
+    if hits:
+        _login_failures[key] = hits
+    else:
+        _login_failures.pop(key, None)
+    return hits
+
+def login_retry_after(email: str, ip: str, now: float) -> int:
+    """Seconds until another attempt is allowed, or 0 if allowed now."""
+    waits = []
+    for key, limit in ((f"acct:{email}|{ip}", LOGIN_MAX_FAILS_PER_ACCOUNT_IP), (f"ip:{ip}", LOGIN_MAX_FAILS_PER_IP)):
+        hits = _recent_failures(key, now)
+        if len(hits) >= limit:
+            waits.append(int(LOGIN_WINDOW_SEC - (now - hits[-limit])) + 1)
+    return max(waits) if waits else 0
+
+def record_login_failure(email: str, ip: str, now: float) -> None:
+    if len(_login_failures) > 20000:  # bound memory under a flood
+        for k in list(_login_failures):
+            _recent_failures(k, now)
+    for key in (f"acct:{email}|{ip}", f"ip:{ip}"):
+        _login_failures.setdefault(key, []).append(now)
+
+def clear_login_failures(email: str, ip: str) -> None:
+    _login_failures.pop(f"acct:{email}|{ip}", None)
+
+def too_many_attempts(retry_after: int) -> HTTPException:
+    mins = max(1, (retry_after + 59) // 60)
+    return HTTPException(429, f"Too many failed login attempts. Please try again in {mins} minute{'s' if mins != 1 else ''}.",
+                         headers={"Retry-After": str(retry_after)})
+
+# AI Coach daily allowance (protects the Gemini quota; matches the free plan).
+COACH_DAILY_LIMIT = int(os.environ.get("COACH_DAILY_LIMIT", "5"))
+COACH_DEMO_DAILY_LIMIT = int(os.environ.get("COACH_DEMO_DAILY_LIMIT", "50"))
+COACH_OFFLINE_REPLY = "My brain is offline for a moment. Please try again in a bit."
+# Shown when there is no usable model answer (no API key, or Gemini returned no text).
+# Like the offline reply, it never counts towards the daily allowance.
+COACH_FALLBACK_REPLY = "I'm here — ask me anything about money."
+COACH_UNCOUNTED_REPLIES = [COACH_OFFLINE_REPLY, COACH_FALLBACK_REPLY]
+GEMINI_STAGE_TIMEOUT_SEC = 90.0   # per stage (connect / send / each read), httpx semantics
+GEMINI_TOTAL_TIMEOUT_SEC = 100.0  # whole call, so a slowly trickling response can't run on
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def ist_day_start_iso() -> str:
+    start = now_utc().astimezone(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc).isoformat()
+
+# Concurrency-safe allowance. Counting saved replies alone lets simultaneous requests
+# from one user all pass the check before any reply is saved. So each request first
+# reserves a slot: under a per-user lock it counts today's successful replies plus
+# requests still in flight, and only then takes a slot. The slot is always released
+# when the request ends (success, Gemini failure or error). A successful reply is
+# saved before release, so the database count takes over from the reservation.
+# Held in memory: correct for the single Render process (see SECURITY.md).
+#
+# Stale counts: a count query can be evaluated before another request's reply is saved
+# and return after that request has released its slot, so neither the count nor the
+# in-flight total includes it. Every release therefore bumps a per-user completion
+# counter (after the reply is saved). If it changed while we were counting, count again.
+# The loop ends: completions only come from in-flight requests, and no new ones can
+# start while we hold this user's lock.
+# Per-user locks and completion counters are never deleted while the process runs: a
+# deleted counter could restart at a value a counting request already saw and hide a
+# completion. They are tiny (one lock + one int per Coach user) and reset on restart.
+_coach_inflight: dict = {}     # (user_id, IST day) -> requests in progress
+_coach_locks: dict = {}        # user_id -> asyncio.Lock (one per user, always the same)
+_coach_completions: dict = {}  # user_id -> requests finished so far (only ever increases)
+
+def coach_limit_for(user: dict) -> int:
+    demo_email = os.environ.get("ADMIN_EMAIL", "demo@nugvio.in").lower()
+    return COACH_DEMO_DAILY_LIMIT if (user.get("email") or "").lower() == demo_email else COACH_DAILY_LIMIT
+
+async def coach_reserve(user: dict) -> tuple:
+    uid = user["id"]
+    limit = coach_limit_for(user)
+    day = ist_day_start_iso()
+    key = (uid, day)
+    lock = _coach_locks.setdefault(uid, asyncio.Lock())
+    async with lock:
+        while True:
+            seen = _coach_completions.get(uid, 0)
+            used = await db.coach_messages.count_documents({
+                "user_id": uid, "role": "coach",
+                "at": {"$gte": day},
+                "text": {"$nin": COACH_UNCOUNTED_REPLIES},
+            })
+            if _coach_completions.get(uid, 0) == seen:
+                break  # nothing finished during the count, so it is current
+        if used >= limit:
+            raise HTTPException(429, f"You've used today's {limit} AI Coach messages. They reset at midnight (IST).")
+        if used + _coach_inflight.get(key, 0) >= limit:
+            raise HTTPException(429, "Your last AI Coach message is still being answered. Please wait for it to finish.")
+        _coach_inflight[key] = _coach_inflight.get(key, 0) + 1
+    return key
+
+def coach_release(key: tuple) -> None:
+    # Synchronous on purpose: it can't be interrupted, so it always runs in `finally`.
+    uid = key[0]
+    _coach_completions[uid] = _coach_completions.get(uid, 0) + 1
+    n = _coach_inflight.get(key, 0) - 1
+    if n > 0:
+        _coach_inflight[key] = n
+    else:
+        _coach_inflight.pop(key, None)
 
 def hash_pw(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
@@ -122,12 +251,12 @@ async def get_current_user(request: Request) -> dict:
 # ------------------ MODELS ------------------
 class RegisterIn(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=8, max_length=128)
     name: str = Field(min_length=1, max_length=60)
 
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=128)  # no minimum: existing accounts keep working
 
 class ExpenseIn(BaseModel):
     description: str
@@ -168,9 +297,11 @@ class DebtIn(BaseModel):
     apr: float = Field(ge=0)  # annual %
     min_payment: float = Field(gt=0)
 
+COACH_MAX_CHARS = 1000
+
 class CoachMsgIn(BaseModel):
-    session_id: str
-    text: str
+    session_id: str = Field(min_length=1, max_length=100)
+    text: str = Field(min_length=1, max_length=COACH_MAX_CHARS)
 
 class LessonCompleteIn(BaseModel):
     lesson_id: str
@@ -259,11 +390,18 @@ async def register(body: RegisterIn, response: Response):
     return {"id": uid, "email": email, "name": doc["name"], "nug_points": 100, "token": token}
 
 @api.post("/auth/login")
-async def login(body: LoginIn, response: Response):
+async def login(body: LoginIn, request: Request, response: Response):
     email = body.email.lower().strip()
+    ip = client_ip(request)
+    now = datetime.now(timezone.utc).timestamp()
+    wait = login_retry_after(email, ip, now)
+    if wait:
+        raise too_many_attempts(wait)
     u = await db.users.find_one({"email": email})
     if not u or not verify_pw(body.password, u["password_hash"]):
+        record_login_failure(email, ip, now)
         raise HTTPException(401, "Invalid credentials")
+    clear_login_failures(email, ip)
     token = make_token(u["id"], email)
     response.set_cookie("access_token", token, httponly=True, samesite="lax", max_age=ACCESS_TTL_MIN * 60, path="/")
     return {"id": u["id"], "email": u["email"], "name": u["name"], "nug_points": u.get("nug_points", 0), "token": token}
@@ -1268,6 +1406,15 @@ async def _coach_context(user: dict) -> str:
 
 @api.post("/coach/chat")
 async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
+    # Daily allowance: successful replies today (IST) + requests in flight. Gemini
+    # failures are saved with COACH_OFFLINE_REPLY and never count.
+    key = await coach_reserve(user)
+    try:
+        return await _coach_reply(body, user)
+    finally:
+        coach_release(key)
+
+async def _coach_reply(body: CoachMsgIn, user: dict):
     sid = f"{user['id']}::{body.session_id}"
 
     # Save user message
@@ -1307,7 +1454,7 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
         + "Respond to the latest USER message as Nugvio Coach."
     )
 
-    reply = "I'm here — ask me anything about money."
+    reply = COACH_FALLBACK_REPLY
     actions = []
 
     gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -1335,16 +1482,20 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
                 "models/gemini-3.8-flash:generateContent"
             )
 
-            # Gemini replies can take ~30s; 30s was cutting them off (httpx.ReadTimeout).
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                response = await client.post(
-                    url,
-                    headers={
-                        "x-goog-api-key": gemini_key,
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
+            # Gemini replies can take ~30s. httpx's timeout applies per stage, so the whole
+            # call also has an overall deadline; on expiry the call is cancelled and the
+            # user gets the offline reply (which doesn't count).
+            async def _call_gemini():
+                async with httpx.AsyncClient(timeout=GEMINI_STAGE_TIMEOUT_SEC) as client:
+                    return await client.post(
+                        url,
+                        headers={
+                            "x-goog-api-key": gemini_key,
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+            response = await asyncio.wait_for(_call_gemini(), timeout=GEMINI_TOTAL_TIMEOUT_SEC)
 
             response.raise_for_status()
             result = response.json()
@@ -1358,12 +1509,14 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
             ) or reply
 
             reply, actions = _parse_coach_actions(reply)
+            if not reply.strip():
+                # e.g. only an ACTIONS block came back: no answer to show, so fall back
+                # (uncounted) instead of saving an empty message.
+                reply, actions = COACH_FALLBACK_REPLY, []
 
         except Exception as e:
             logging.exception(f"Coach Gemini failed: {e}")
-            reply = (
-                "My brain is offline for a moment. Please try again in a bit."
-            )
+            reply = COACH_OFFLINE_REPLY
 
     await db.coach_messages.insert_one({
         "id": new_id(),

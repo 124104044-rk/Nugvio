@@ -11,6 +11,9 @@ const STATIC_SUGGESTIONS = [
   "What should I do first this month?",
 ];
 
+
+const COACH_MAX_CHARS = 1000; // must match backend CoachMsgIn.text max_length
+
 export default function Coach() {
   const nav = useNavigate();
   const [msgs, setMsgs] = useState([]);
@@ -51,8 +54,14 @@ export default function Coach() {
     try {
       const { data } = await api.post("/coach/chat", { session_id: sid, text });
       setMsgs(m => [...m, { id: 'c'+Date.now(), role: 'coach', text: data.reply, actions: data.actions }]);
-    } catch {
-      setMsgs(m => [...m, { id: 'e'+Date.now(), role: 'coach', text: "Something went wrong. Please retry." }]);
+    } catch (err) {
+      // Show the server's reason for limits (daily allowance, message too long); generic text otherwise.
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail;
+      const text = status === 429 && typeof detail === "string" ? detail
+        : status === 422 ? `Please keep messages under ${COACH_MAX_CHARS} characters.`
+        : "Something went wrong. Please retry.";
+      setMsgs(m => [...m, { id: 'e'+Date.now(), role: 'coach', text }]);
     } finally { setBusy(false); }
   };
 
@@ -62,6 +71,7 @@ export default function Coach() {
         <div>
           <h1 className="text-4xl font-bold">AI Coach</h1>
           <p className="text-[var(--ink-soft)] mt-1">A smart friend, on tap. No jargon. No hype.</p>
+          <p className="text-xs text-[var(--ink-soft)] mt-1" data-testid="coach-privacy-note">To answer, a summary of your finances is sent to Google Gemini. Free plan: 5 messages a day.</p>
         </div>
         <div className="chip" data-testid="coach-context-chip" style={{ background: "#EFF6FF", borderColor: "#BFDBFE" }}>
           <Sparkles size={13} color="#2563EB" /> <span className="font-semibold text-[var(--blue)]">Sees your live numbers</span>
@@ -103,7 +113,7 @@ export default function Coach() {
       </div>
 
       <form onSubmit={(e)=>{e.preventDefault(); send();}} className="card p-3 flex gap-2 shrink-0" data-testid="coach-form">
-        <input data-testid="coach-input" className="input flex-1" placeholder="Ask about money…" value={input} onChange={e=>setInput(e.target.value)} />
+        <input data-testid="coach-input" className="input flex-1" placeholder="Ask about money…" maxLength={COACH_MAX_CHARS} value={input} onChange={e=>setInput(e.target.value)} />
         <button data-testid="coach-send" disabled={busy} className="pill-btn btn-primary flex items-center gap-2"><Send size={16}/> Send</button>
       </form>
     </div>
