@@ -48,6 +48,65 @@ def now_iso() -> str:
 def new_id() -> str:
     return str(uuid.uuid4())
 
+# ------------------ SECURITY LIMITS ------------------
+# Login brute-force protection (in memory: resets when the server restarts; one
+# Render instance, so that is enough to stop password guessing).
+LOGIN_WINDOW_SEC = 15 * 60
+LOGIN_MAX_FAILS_PER_ACCOUNT_IP = 5   # same email from the same address
+LOGIN_MAX_FAILS_PER_IP = 50          # any emails from one address (password spraying)
+_login_failures: dict = {}           # key -> list of failure timestamps
+
+def client_ip(request: Request) -> str:
+    # Render appends the connecting address to X-Forwarded-For and keeps whatever the
+    # client sent, so only the LAST entry is trustworthy.
+    xff = request.headers.get("x-forwarded-for", "")
+    parts = [p.strip() for p in xff.split(",") if p.strip()]
+    if parts:
+        return parts[-1]
+    return request.client.host if request.client else "unknown"
+
+def _recent_failures(key: str, now: float) -> list:
+    hits = [t for t in _login_failures.get(key, []) if now - t < LOGIN_WINDOW_SEC]
+    if hits:
+        _login_failures[key] = hits
+    else:
+        _login_failures.pop(key, None)
+    return hits
+
+def login_retry_after(email: str, ip: str, now: float) -> int:
+    """Seconds until another attempt is allowed, or 0 if allowed now."""
+    waits = []
+    for key, limit in ((f"acct:{email}|{ip}", LOGIN_MAX_FAILS_PER_ACCOUNT_IP), (f"ip:{ip}", LOGIN_MAX_FAILS_PER_IP)):
+        hits = _recent_failures(key, now)
+        if len(hits) >= limit:
+            waits.append(int(LOGIN_WINDOW_SEC - (now - hits[-limit])) + 1)
+    return max(waits) if waits else 0
+
+def record_login_failure(email: str, ip: str, now: float) -> None:
+    if len(_login_failures) > 20000:  # bound memory under a flood
+        for k in list(_login_failures):
+            _recent_failures(k, now)
+    for key in (f"acct:{email}|{ip}", f"ip:{ip}"):
+        _login_failures.setdefault(key, []).append(now)
+
+def clear_login_failures(email: str, ip: str) -> None:
+    _login_failures.pop(f"acct:{email}|{ip}", None)
+
+def too_many_attempts(retry_after: int) -> HTTPException:
+    mins = max(1, (retry_after + 59) // 60)
+    return HTTPException(429, f"Too many failed login attempts. Please try again in {mins} minute{'s' if mins != 1 else ''}.",
+                         headers={"Retry-After": str(retry_after)})
+
+# AI Coach daily allowance (protects the Gemini quota; matches the free plan).
+COACH_DAILY_LIMIT = int(os.environ.get("COACH_DAILY_LIMIT", "5"))
+COACH_DEMO_DAILY_LIMIT = int(os.environ.get("COACH_DEMO_DAILY_LIMIT", "50"))
+COACH_OFFLINE_REPLY = "My brain is offline for a moment. Please try again in a bit."
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def ist_day_start_iso() -> str:
+    start = now_utc().astimezone(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc).isoformat()
+
 def hash_pw(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
 
@@ -122,12 +181,12 @@ async def get_current_user(request: Request) -> dict:
 # ------------------ MODELS ------------------
 class RegisterIn(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=8, max_length=128)
     name: str = Field(min_length=1, max_length=60)
 
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=128)  # no minimum: existing accounts keep working
 
 class ExpenseIn(BaseModel):
     description: str
@@ -168,9 +227,11 @@ class DebtIn(BaseModel):
     apr: float = Field(ge=0)  # annual %
     min_payment: float = Field(gt=0)
 
+COACH_MAX_CHARS = 1000
+
 class CoachMsgIn(BaseModel):
-    session_id: str
-    text: str
+    session_id: str = Field(min_length=1, max_length=100)
+    text: str = Field(min_length=1, max_length=COACH_MAX_CHARS)
 
 class LessonCompleteIn(BaseModel):
     lesson_id: str
@@ -259,11 +320,18 @@ async def register(body: RegisterIn, response: Response):
     return {"id": uid, "email": email, "name": doc["name"], "nug_points": 100, "token": token}
 
 @api.post("/auth/login")
-async def login(body: LoginIn, response: Response):
+async def login(body: LoginIn, request: Request, response: Response):
     email = body.email.lower().strip()
+    ip = client_ip(request)
+    now = datetime.now(timezone.utc).timestamp()
+    wait = login_retry_after(email, ip, now)
+    if wait:
+        raise too_many_attempts(wait)
     u = await db.users.find_one({"email": email})
     if not u or not verify_pw(body.password, u["password_hash"]):
+        record_login_failure(email, ip, now)
         raise HTTPException(401, "Invalid credentials")
+    clear_login_failures(email, ip)
     token = make_token(u["id"], email)
     response.set_cookie("access_token", token, httponly=True, samesite="lax", max_age=ACCESS_TTL_MIN * 60, path="/")
     return {"id": u["id"], "email": u["email"], "name": u["name"], "nug_points": u.get("nug_points", 0), "token": token}
@@ -1270,6 +1338,18 @@ async def _coach_context(user: dict) -> str:
 async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
     sid = f"{user['id']}::{body.session_id}"
 
+    # Daily allowance: count today's (IST) successful coach replies, so a Gemini
+    # outage never uses up a user's messages.
+    demo_email = os.environ.get("ADMIN_EMAIL", "demo@nugvio.in").lower()
+    limit = COACH_DEMO_DAILY_LIMIT if (user.get("email") or "").lower() == demo_email else COACH_DAILY_LIMIT
+    used = await db.coach_messages.count_documents({
+        "user_id": user["id"], "role": "coach",
+        "at": {"$gte": ist_day_start_iso()},
+        "text": {"$ne": COACH_OFFLINE_REPLY},
+    })
+    if used >= limit:
+        raise HTTPException(429, f"You've used today's {limit} AI Coach messages. They reset at midnight (IST).")
+
     # Save user message
     await db.coach_messages.insert_one({
         "id": new_id(),
@@ -1361,9 +1441,7 @@ async def coach_chat(body: CoachMsgIn, user: dict = Depends(get_current_user)):
 
         except Exception as e:
             logging.exception(f"Coach Gemini failed: {e}")
-            reply = (
-                "My brain is offline for a moment. Please try again in a bit."
-            )
+            reply = COACH_OFFLINE_REPLY
 
     await db.coach_messages.insert_one({
         "id": new_id(),

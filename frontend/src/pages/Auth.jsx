@@ -74,7 +74,7 @@ export default function AuthPage({ mode }) {
           </div>
           <div className="mb-3">
             <label className="text-xs font-semibold text-[var(--ink-soft)]">Password</label>
-            <input data-testid="auth-password" type="password" className="input mt-1" value={password} onChange={e=>setPassword(e.target.value)} required minLength={6}/>
+            <input data-testid="auth-password" type="password" className="input mt-1" value={password} onChange={e=>setPassword(e.target.value)} required minLength={isLogin ? undefined : 8} maxLength={128}/>
           </div>
 
           {err && <div className="text-sm text-[var(--coral)] my-2" data-testid="auth-error">{err}</div>}

@@ -83,7 +83,11 @@ let webpackConfig = {
     alias: {
       '@': path.resolve(__dirname, 'src'),
     },
-    configure: (webpackConfig) => {
+    configure: (webpackConfig, { env }) => {
+      // Security: don't publish source maps (original source) with production builds.
+      if (env === "production") {
+        webpackConfig.devtool = false;
+      }
 
       // Add ignored patterns to reduce watched directories
         webpackConfig.watchOptions = {
