@@ -107,6 +107,12 @@ def too_many_attempts(retry_after: int) -> HTTPException:
 COACH_DAILY_LIMIT = int(os.environ.get("COACH_DAILY_LIMIT", "5"))
 COACH_DEMO_DAILY_LIMIT = int(os.environ.get("COACH_DEMO_DAILY_LIMIT", "50"))
 COACH_OFFLINE_REPLY = "My brain is offline for a moment. Please try again in a bit."
+# Shown when there is no usable model answer (no API key, or Gemini returned no text).
+# Like the offline reply, it never counts towards the daily allowance.
+COACH_FALLBACK_REPLY = "I'm here — ask me anything about money."
+COACH_UNCOUNTED_REPLIES = [COACH_OFFLINE_REPLY, COACH_FALLBACK_REPLY]
+GEMINI_STAGE_TIMEOUT_SEC = 90.0   # per stage (connect / send / each read), httpx semantics
+GEMINI_TOTAL_TIMEOUT_SEC = 100.0  # whole call, so a slowly trickling response can't run on
 IST = timezone(timedelta(hours=5, minutes=30))
 
 def ist_day_start_iso() -> str:
@@ -120,8 +126,19 @@ def ist_day_start_iso() -> str:
 # when the request ends (success, Gemini failure or error). A successful reply is
 # saved before release, so the database count takes over from the reservation.
 # Held in memory: correct for the single Render process (see SECURITY.md).
-_coach_inflight: dict = {}   # (user_id, IST day) -> requests in progress
-_coach_locks: dict = {}      # user_id -> asyncio.Lock
+#
+# Stale counts: a count query can be evaluated before another request's reply is saved
+# and return after that request has released its slot, so neither the count nor the
+# in-flight total includes it. Every release therefore bumps a per-user completion
+# counter (after the reply is saved). If it changed while we were counting, count again.
+# The loop ends: completions only come from in-flight requests, and no new ones can
+# start while we hold this user's lock.
+# Per-user locks and completion counters are never deleted while the process runs: a
+# deleted counter could restart at a value a counting request already saw and hide a
+# completion. They are tiny (one lock + one int per Coach user) and reset on restart.
+_coach_inflight: dict = {}     # (user_id, IST day) -> requests in progress
+_coach_locks: dict = {}        # user_id -> asyncio.Lock (one per user, always the same)
+_coach_completions: dict = {}  # user_id -> requests finished so far (only ever increases)
 
 def coach_limit_for(user: dict) -> int:
     demo_email = os.environ.get("ADMIN_EMAIL", "demo@nugvio.in").lower()
@@ -134,11 +151,15 @@ async def coach_reserve(user: dict) -> tuple:
     key = (uid, day)
     lock = _coach_locks.setdefault(uid, asyncio.Lock())
     async with lock:
-        used = await db.coach_messages.count_documents({
-            "user_id": uid, "role": "coach",
-            "at": {"$gte": day},
-            "text": {"$ne": COACH_OFFLINE_REPLY},
-        })
+        while True:
+            seen = _coach_completions.get(uid, 0)
+            used = await db.coach_messages.count_documents({
+                "user_id": uid, "role": "coach",
+                "at": {"$gte": day},
+                "text": {"$nin": COACH_UNCOUNTED_REPLIES},
+            })
+            if _coach_completions.get(uid, 0) == seen:
+                break  # nothing finished during the count, so it is current
         if used >= limit:
             raise HTTPException(429, f"You've used today's {limit} AI Coach messages. They reset at midnight (IST).")
         if used + _coach_inflight.get(key, 0) >= limit:
@@ -147,14 +168,14 @@ async def coach_reserve(user: dict) -> tuple:
     return key
 
 def coach_release(key: tuple) -> None:
+    # Synchronous on purpose: it can't be interrupted, so it always runs in `finally`.
+    uid = key[0]
+    _coach_completions[uid] = _coach_completions.get(uid, 0) + 1
     n = _coach_inflight.get(key, 0) - 1
     if n > 0:
         _coach_inflight[key] = n
     else:
         _coach_inflight.pop(key, None)
-        lock = _coach_locks.get(key[0])
-        if lock is not None and not lock.locked() and not any(k[0] == key[0] for k in _coach_inflight):
-            _coach_locks.pop(key[0], None)
 
 def hash_pw(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
@@ -1433,7 +1454,7 @@ async def _coach_reply(body: CoachMsgIn, user: dict):
         + "Respond to the latest USER message as Nugvio Coach."
     )
 
-    reply = "I'm here — ask me anything about money."
+    reply = COACH_FALLBACK_REPLY
     actions = []
 
     gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -1461,16 +1482,20 @@ async def _coach_reply(body: CoachMsgIn, user: dict):
                 "models/gemini-3.8-flash:generateContent"
             )
 
-            # Gemini replies can take ~30s; 30s was cutting them off (httpx.ReadTimeout).
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                response = await client.post(
-                    url,
-                    headers={
-                        "x-goog-api-key": gemini_key,
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
+            # Gemini replies can take ~30s. httpx's timeout applies per stage, so the whole
+            # call also has an overall deadline; on expiry the call is cancelled and the
+            # user gets the offline reply (which doesn't count).
+            async def _call_gemini():
+                async with httpx.AsyncClient(timeout=GEMINI_STAGE_TIMEOUT_SEC) as client:
+                    return await client.post(
+                        url,
+                        headers={
+                            "x-goog-api-key": gemini_key,
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+            response = await asyncio.wait_for(_call_gemini(), timeout=GEMINI_TOTAL_TIMEOUT_SEC)
 
             response.raise_for_status()
             result = response.json()
@@ -1484,6 +1509,10 @@ async def _coach_reply(body: CoachMsgIn, user: dict):
             ) or reply
 
             reply, actions = _parse_coach_actions(reply)
+            if not reply.strip():
+                # e.g. only an ACTIONS block came back: no answer to show, so fall back
+                # (uncounted) instead of saving an empty message.
+                reply, actions = COACH_FALLBACK_REPLY, []
 
         except Exception as e:
             logging.exception(f"Coach Gemini failed: {e}")

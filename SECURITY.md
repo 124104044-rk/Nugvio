@@ -15,10 +15,20 @@ variable is `REACT_APP_BACKEND_URL`, which is public.
 | Failed logins from one address, any email | 50 per 15 min | `LOGIN_MAX_FAILS_PER_IP` |
 | Password length for new accounts | 8–128 characters | `RegisterIn` |
 
-Only successful AI Coach replies count, so a Gemini outage doesn't use up a user's messages.
+Only genuine AI Coach answers count. The offline reply (Gemini failed or timed out) and the
+fallback reply (no API key, or Gemini returned no usable text) are shown to the user as before
+but never count, so outages and empty responses don't use up a user's messages.
+
 Simultaneous Coach requests from one user can't exceed the allowance: each request first
 reserves a slot under a per-user lock (successful replies today + requests in flight), and
-releases it when it finishes, whether it succeeded, Gemini failed or an error occurred.
+releases it when it finishes, whether it succeeded, Gemini failed, timed out, was cancelled or
+an error occurred. Each release also bumps a per-user completion counter; if it changes while
+a request is counting, the request counts again, so a reply saved during a count is never
+missed. The per-user lock and counter are kept for the life of the process (a few hundred
+bytes per Coach user) so they can never be reset mid-count.
+
+The Gemini call has two timeouts: 90 seconds per stage (httpx: connect, send, each read) and
+an overall 100-second deadline, so a slowly trickling response can't keep a request running.
 
 The login lockout is per email *and* address, so nobody can lock a user (or the public demo
 account) out from another network. The client address is the last `X-Forwarded-For` entry,
@@ -26,8 +36,8 @@ which Render adds itself (earlier entries can be faked by the client).
 
 ## In-memory state: limitations
 
-The failed-login counters and the in-flight Coach reservations are kept in the backend
-process's memory. The daily Coach count itself is read from MongoDB, so it survives restarts.
+The failed-login counters, the in-flight Coach reservations and the per-user Coach locks and
+completion counters are kept in the backend process's memory. The daily Coach count itself is read from MongoDB, so it survives restarts.
 
 **Current deployment (checked 23 Nov 2026): one process on one instance.**
 - Render service: Free plan. Free web services can't scale beyond a single instance.
